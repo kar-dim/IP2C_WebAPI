@@ -32,6 +32,13 @@ namespace IP2C_WebAPI.Controllers
         [HttpGet("GetIpInfo/{Ip}")]
         public async Task<ActionResult<IpInfoDTO>> GetIpInfo(string Ip)
         {
+            //basic validation of IP (regex works for ipv4 addresses)
+            Regex pattern = new Regex(@"^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}$");
+            if (!pattern.IsMatch(Ip))
+            {
+                _logger.LogError("GetIpInfo: BAD Ip received");
+                return BadRequest("BAD IP");
+            }
             //first check cache
             IpInfoDTO? ipInfo = _ipRenewalService.GetIpInformation(Ip);
             if (ipInfo != null)
@@ -120,6 +127,15 @@ namespace IP2C_WebAPI.Controllers
             //else, add to the WHERE clause the countries that the client wants
             else
             {
+                //validate countryCodes
+                foreach(var country in countryCodes)
+                {
+                    if (country == null || country.Trim().Length != 2)
+                    {
+                        _logger.LogError("GetIpReport: At least one wrong country code received");
+                        return BadRequest("BAD COUNTRY CODE"); //400
+                    }
+                }
                 string countryCodesSqlClause = countryCodes.Length == 1 ? "WHERE Countries.TwoLetterCode = @p0" : "WHERE Countries.TwoLetterCode IN (" + string.Join(", ", countryCodes.Select((_, i) => $"@p{i}")) + ")";
                 object[] parameterArray = countryCodes.Select((val, i) => new SqlParameter($"@p{i}", val)).ToArray();
                 results = await _mainDbContext.IpReportDTOs.FromSqlRaw($"SELECT Countries.Name, COUNT(Countries.NAME) AS 'AddressesCount', MAX(IPAddresses.UpdatedAt) AS 'LastAddressUpdated' FROM Countries INNER JOIN IPAddresses ON IPAddresses.CountryId = Countries.Id " + countryCodesSqlClause + " GROUP BY Countries.Name", parameterArray)
@@ -131,7 +147,7 @@ namespace IP2C_WebAPI.Controllers
                 _logger.LogError("GetIpReport: No IPs were found!");
                 return NotFound("NO IP DATA FOUND");
             }
-            _logger.LogError("GetIpReport: Report generated successfully");
+            _logger.LogInformation("GetIpReport: Report generated successfully");
             return Ok(results);
         }
     }
