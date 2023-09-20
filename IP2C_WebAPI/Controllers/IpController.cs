@@ -19,15 +19,13 @@ namespace IP2C_WebAPI.Controllers
         private readonly Ip2cDbContext _mainDbContext;
         private readonly IpRenewalService _ipRenewalService;
         private readonly Ip2cService _ip2cService;
-        private readonly IConfiguration _configuration;
 
-        public IpController(Ip2cDbContext mainDbContext, ILogger<IpController> logger, Ip2cService ip2cService, IpRenewalService ipRenewalService, IConfiguration configuration)
+        public IpController(Ip2cDbContext mainDbContext, ILogger<IpController> logger, Ip2cService ip2cService, IpRenewalService ipRenewalService)
         {
             _mainDbContext = mainDbContext;
             _logger = logger;
             _ipRenewalService = ipRenewalService;
             _ip2cService = ip2cService;
-            _configuration = configuration;
         }
 
         //Get IP information
@@ -79,7 +77,6 @@ namespace IP2C_WebAPI.Controllers
                 return statusCode == -2 ? NotFound("IP NOT FOUND") : Problem("INTERNAL ERROR");
 
             //if OK
-            _logger.LogInformation("GetIpInfo: Found Ip Info from I2PC service, returned to client");
             //update cache
             _ipRenewalService.UpdateCacheEntry(Ip, i2pcInfo);
 
@@ -107,6 +104,7 @@ namespace IP2C_WebAPI.Controllers
             };
             await _mainDbContext.Ipaddresses.AddAsync(toAdd);
             await _mainDbContext.SaveChangesAsync();
+            _logger.LogInformation("GetIpInfo: Found Ip Info from I2PC service, returned to client");
 
             return Ok(i2pcInfo);
         }
@@ -116,8 +114,10 @@ namespace IP2C_WebAPI.Controllers
         public async Task<ActionResult<List<IpInfoDTO>>> GetIpReport([FromQuery] string[]? countryCodes)
         {
             List<IpReportDTO>? results = null;
+            //if no query parameters,  get all countries
             if (countryCodes == null || countryCodes.Length == 0)
                 results = await _mainDbContext.IpReportDTOs.FromSqlRaw($"SELECT Countries.Name, COUNT(Countries.NAME) AS 'AddressesCount', MAX(IPAddresses.UpdatedAt) AS 'LastAddressUpdated' FROM Countries INNER JOIN IPAddresses ON IPAddresses.CountryId = Countries.Id GROUP BY Countries.Name").AsNoTracking().ToListAsync(); 
+            //else, add to the WHERE clause the countries that the client wants
             else
             {
                 string countryCodesSqlClause = countryCodes.Length == 1 ? "WHERE Countries.TwoLetterCode = @p0" : "WHERE Countries.TwoLetterCode IN (" + string.Join(", ", countryCodes.Select((_, i) => $"@p{i}")) + ")";
@@ -131,6 +131,7 @@ namespace IP2C_WebAPI.Controllers
                 _logger.LogError("GetIpReport: No IPs were found!");
                 return NotFound("NO IP DATA FOUND");
             }
+            _logger.LogError("GetIpReport: Report generated successfully");
             return Ok(results);
         }
     }

@@ -1,7 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-
-namespace IP2C_WebAPI.Models;
+﻿namespace IP2C_WebAPI.Models;
 
 public partial class Country
 {

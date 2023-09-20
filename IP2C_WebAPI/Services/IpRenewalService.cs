@@ -2,7 +2,6 @@
 using IP2C_WebAPI.DTO;
 using IP2C_WebAPI.Models;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.Memory;
 using ReactMeals_WebApi.Services;
 using System.Collections.Specialized;
 
@@ -79,7 +78,7 @@ namespace IP2C_WebAPI.Services
                 while (!cancellationToken.IsCancellationRequested)
                 {
                     //get all the countries from our db first
-                    List<Country> countries =  await mainDbContext.Countries.ToListAsync();
+                    List<Country> countries = await mainDbContext.Countries.ToListAsync();
                     if (countries.Any())
                     {
                         Dictionary<string, int> countryIdCodes = new Dictionary<string, int>();
@@ -88,7 +87,7 @@ namespace IP2C_WebAPI.Services
                             countryIdCodes[country.ThreeLetterCode] = country.Id;
                         }
                         //get ips by batches (keyset pagination)
-                        int lastId = 6; //in our sample db, the minimum id = 6
+                        int lastId = 6; //in our sample db the minimum id = 6
                         while (true)
                         {
                             var ipPage = await mainDbContext.Ipaddresses
@@ -98,7 +97,7 @@ namespace IP2C_WebAPI.Services
                                 .ToListAsync();
                             if (!ipPage.Any())
                                 break;
-                            //update information for these N Ip addresses
+                            //update information for these 100 Ip addresses
                             foreach(var ipAddress in ipPage)
                             {
                                 (IpInfoDTO? ipInfo, int result) = await ip2cService.RetrieveIpInfo(ipAddress.Ip);
@@ -152,6 +151,7 @@ namespace IP2C_WebAPI.Services
                         
                     }
                     //sleep for 1 hour
+                    _logger.LogInformation(_className + "Service will sleep for 1 hour");
                     await Task.Delay(3600000);
                 }
             }
