@@ -1,186 +1,131 @@
-﻿using IP2C_WebAPI.Contexts;
-using IP2C_WebAPI.DTO;
+﻿using IP2C_WebAPI.DTO;
 using IP2C_WebAPI.Models;
-using Microsoft.EntityFrameworkCore;
-using ReactMeals_WebApi.Services;
+using IP2C_WebAPI.Repositories;
 using System.Collections.Specialized;
 
-namespace IP2C_WebAPI.Services
+namespace IP2C_WebAPI.Services;
+
+public class IpRenewalService : IHostedService, IDisposable
 {
-    public class IpRenewalService : IHostedService, IDisposable
+    private readonly Ip2cRepository _ip2cRepository;
+    private readonly Ip2cService _ip2CService;
+    private readonly ILogger<IpRenewalService> _logger;
+    private readonly OrderedDictionary _ipCache;
+    private readonly object ipCacheLock;
+
+    private readonly int maxCacheSize;
+    public IpRenewalService(Ip2cRepository ip2cRepository, Ip2cService ip2CService, ILogger<IpRenewalService> logger, IConfiguration configuration)
     {
-        private string _className;
-        private OrderedDictionary _ipCache;
-        private readonly object ipCacheLock;
-        private CancellationTokenSource _cancellationTokenSource;
-        private readonly ILogger<IpRenewalService> _logger;
-        private readonly IServiceScopeFactory _scopeFactory;
-        private readonly IConfiguration _configuration;
-        private readonly int maxCacheSize;
-        public IpRenewalService(IServiceScopeFactory scopeFactory, ILogger<IpRenewalService> logger, IConfiguration configuration)
-        {
-            ipCacheLock = new object();
-            _className = nameof(IpRenewalService) + ": ";
-            _cancellationTokenSource = new CancellationTokenSource();
-            _logger = logger;
-            _scopeFactory = scopeFactory;
-            using (var scope = _scopeFactory.CreateScope())
-            {
-                //get the scoped contextDb
-                var mainDbContext = scope.ServiceProvider.GetRequiredService<Ip2cDbContext>();
+        _ip2cRepository = ip2cRepository;
+        _ip2CService = ip2CService;
+        ipCacheLock = new object();
+        _logger = logger;
+        maxCacheSize = configuration["IpCacheMaxSize"] == null ? 50 : int.Parse(configuration["IpCacheMaxSize"]);
+        //populate cache from db
+        _ipCache = new OrderedDictionary(maxCacheSize);
 
-                _configuration = configuration;
-                maxCacheSize = _configuration["IpCacheMaxSize"] == null ? 50 : int.Parse(_configuration["IpCacheMaxSize"]);
-                //initialize cache from db, get the TOP N ordered by IP "UpdatedAt" (most recent IP which changed, first the old and then the new)
-                _ipCache = new OrderedDictionary(maxCacheSize);
-                var cacheEntries = (from ip in mainDbContext.Ipaddresses
-                                    join country in mainDbContext.Countries on ip.CountryId equals country.Id
-                                    orderby ip.UpdatedAt ascending
-                                    select new
-                                    {
-                                        ip.Ip,
-                                        country.Name,
-                                        country.TwoLetterCode,
-                                        country.ThreeLetterCode
-                                    }).Take(maxCacheSize);
-                //populate cache
-                foreach (var cacheEntry in cacheEntries)
+        foreach (var cacheEntry in _ip2cRepository.GetIpsWithCountryAsc(maxCacheSize))
+        {
+            _ipCache[cacheEntry.Ip] = new IpInfoDTO(cacheEntry.TwoLetterCode, cacheEntry.ThreeLetterCode, cacheEntry.CountryName);
+        }
+    }
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        Task.Run(async () => await RenewIpsLoop(cancellationToken), cancellationToken);
+        return Task.CompletedTask;
+    }
+
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await Task.CompletedTask;
+    }
+
+    //main service loop, renews the IPs by using the ip2c service and then sleeps for 1 hour
+    private async Task RenewIpsLoop(CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("RenewIpsLoop called");
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            //get all the countries from our db first
+            List<Country> countries = await _ip2cRepository.GetCountriesAsync();
+            if (countries.Count != 0)
+            {
+                Dictionary<string, int> countryIdCodes = new Dictionary<string, int>();
+                foreach (var country in countries)
                 {
-                    _ipCache[cacheEntry.Ip] = new IpInfoDTO { 
-                        CountryName = cacheEntry.Name, 
-                        TwoLetterCode = cacheEntry.TwoLetterCode, 
-                        ThreeLetterCode = cacheEntry.ThreeLetterCode 
-                    };
+                    countryIdCodes[country.ThreeLetterCode] = country.Id;
                 }
-            }
-        }
-        public Task StartAsync(CancellationToken cancellationToken)
-        {
-            Task.Run(async () => await RenewIpsLoop(_cancellationTokenSource.Token));
-            return Task.CompletedTask;
-        }
-
-        public async Task StopAsync(CancellationToken cancellationToken)
-        {
-            _cancellationTokenSource?.Cancel();
-            await Task.CompletedTask;
-        }
-
-
-        //main service loop, renews the IPs by using the ip2c service and then sleeps for 1 hour
-        private async Task RenewIpsLoop(CancellationToken cancellationToken)
-        {
-            _logger.LogInformation(_className + "RenewIpsLoop called");
-            using (var scope = _scopeFactory.CreateScope())
-            {
-                var ip2cService = scope.ServiceProvider.GetRequiredService<Ip2cService>();
-                var mainDbContext = scope.ServiceProvider.GetRequiredService<Ip2cDbContext>();
-                while (!cancellationToken.IsCancellationRequested)
+                //get ips by batches (keyset pagination)
+                int lastId = 6; //in our sample db the minimum id = 6
+                while (true)
                 {
-                    //get all the countries from our db first
-                    List<Country> countries = await mainDbContext.Countries.ToListAsync();
-                    if (countries.Any())
+                    var ipPage = await _ip2cRepository.GetIpAddressesRangeAsync(lastId);
+                    if (ipPage.Count == 0)
+                        break;
+                    //update information for these 100 Ip addresses
+                    foreach (var ipAddress in ipPage)
                     {
-                        Dictionary<string, int> countryIdCodes = new Dictionary<string, int>();
-                        foreach(var country in countries)
+                        (IpInfoDTO ipInfo, IP2C_STATUS result) = await _ip2CService.RetrieveIpInfo(ipAddress.Ip);
+                        if (ipInfo != null)
                         {
-                            countryIdCodes[country.ThreeLetterCode] = country.Id;
-                        }
-                        //get ips by batches (keyset pagination)
-                        int lastId = 6; //in our sample db the minimum id = 6
-                        while (true)
-                        {
-                            var ipPage = await mainDbContext.Ipaddresses
-                                .OrderBy(x => x.Id)
-                                .Where(x => x.Id > lastId)
-                                .Take(100) //read 100 per batch
-                                .ToListAsync();
-                            if (!ipPage.Any())
-                                break;
-                            //update information for these 100 Ip addresses
-                            foreach(var ipAddress in ipPage)
+                            //we have to check if the country for this IP changed
+                            //which MAY happen to be a new country that does not exist in our db, so we must add it
+                            bool countryExists = countryIdCodes.ContainsKey(ipInfo.ThreeLetterCode);
+                            //if country does not exist, we add it to db
+                            if (!countryExists)
                             {
-                                (IpInfoDTO? ipInfo, int result) = await ip2cService.RetrieveIpInfo(ipAddress.Ip);
-                                if (ipInfo != null)
-                                {
-                                    //we have to check if the country for this IP changed
-                                    //which MAY happen to be a new country that does not exist in our db, so we must add it
-                                    bool countryExists = countryIdCodes.ContainsKey(ipInfo.ThreeLetterCode);
-                                    //if country does not exist, we add it to db
-                                    if (!countryExists)
-                                    {
-                                        Country countryToAdd = new Country
-                                        {
-                                            CreatedAt = DateTime.Now,
-                                            TwoLetterCode = ipInfo.TwoLetterCode,
-                                            ThreeLetterCode = ipInfo.ThreeLetterCode,
-                                            Name = ipInfo.CountryName
-                                        };
-                                        mainDbContext.Countries.Add(countryToAdd);
-                                        //we can't avoid this, we must insert to db so that we can retrieve the ID from db
-                                        await mainDbContext.SaveChangesAsync();
-                                        countryIdCodes[ipInfo.ThreeLetterCode] = countryToAdd.Id;
-                                    }
-
-                                    //update cache (only if changed)
-                                    if (_ipCache[ipAddress.Ip] != null && ipAddress.Country != null && !ipAddress.Country.ThreeLetterCode.Equals(ipInfo.ThreeLetterCode))
-                                    {
-                                        _ipCache[ipAddress.Ip] = new IpInfoDTO
-                                        {
-                                            CountryName = ipInfo.CountryName,
-                                            TwoLetterCode = ipInfo.TwoLetterCode,
-                                            ThreeLetterCode = ipInfo.ThreeLetterCode
-                                        };
-                                    }
-
-                                    //update db, replace old values with new values ONLY if changes occured
-                                    if (ipAddress.Country!= null && !ipAddress.Country.ThreeLetterCode.Equals(ipInfo.ThreeLetterCode))
-                                    {
-                                        ipAddress.Country = null;
-                                        ipAddress.CountryId = countryIdCodes[ipInfo.ThreeLetterCode];
-                                        ipAddress.UpdatedAt = DateTime.Now;
-                                        mainDbContext.Update(ipAddress);
-                                        //await mainDbContext.SaveChangesAsync(); //don't update here
-                                    }
-                                }
+                                Country countryToAdd = new Country(default, ipInfo.CountryName, ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, DateTime.Now);
+                                await _ip2cRepository.AddCountry(countryToAdd);
+                                countryIdCodes[ipInfo.ThreeLetterCode] = countryToAdd.Id;
                             }
-                            //update all IPs at once
-                            await mainDbContext.SaveChangesAsync();
-                            lastId += 100;
+
+                            //update cache (only if changed)
+                            if (_ipCache[ipAddress.Ip] != null && ipAddress.Country != null && !ipAddress.Country.ThreeLetterCode.Equals(ipInfo.ThreeLetterCode))
+                                _ipCache[ipAddress.Ip] = new IpInfoDTO(ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, ipInfo.CountryName);
+
+                            //update db, replace old values with new values ONLY if changes occured
+                            if (ipAddress.Country != null && !ipAddress.Country.ThreeLetterCode.Equals(ipInfo.ThreeLetterCode))
+                            {
+                                ipAddress.Country = default;
+                                ipAddress.CountryId = countryIdCodes[ipInfo.ThreeLetterCode];
+                                ipAddress.UpdatedAt = DateTime.Now;
+                                _ip2cRepository.UpdateIpAddress(ipAddress);
+                            }
                         }
-                        
                     }
-                    //sleep for 1 hour
-                    _logger.LogInformation(_className + "Service will sleep for 1 hour");
-                    await Task.Delay(3600000);
+                    //update all IPs at once
+                    await _ip2cRepository.SaveChangesAsync();
+                    lastId += 100;
                 }
+
             }
+            //sleep for 1 hour
+            _logger.LogInformation("Service will sleep for 1 hour");
+            await Task.Delay(TimeSpan.FromHours(1), cancellationToken);
         }
+    }
 
-        public IpInfoDTO? GetIpInformation(string Ip)
+    public IpInfoDTO GetIpInformation(string Ip)
+    {
+        lock (ipCacheLock)
         {
-            lock (ipCacheLock) {
-                return _ipCache.Contains(Ip) ? (IpInfoDTO?)_ipCache[Ip] : null;
-            }
+            return _ipCache.Contains(Ip) ? (IpInfoDTO)_ipCache[Ip] : null;
         }
+    }
 
-        public void UpdateCacheEntry(string Ip, IpInfoDTO infoDTO)
+    public void UpdateCacheEntry(string Ip, IpInfoDTO infoDTO)
+    {
+        lock (ipCacheLock)
         {
-            lock (ipCacheLock)
-            {
-                //remove the oldest if we are at the cache limit
-                if (_ipCache.Count >= maxCacheSize)
-                    _ipCache.Remove(_ipCache[0]);
-                if (_ipCache.Contains(Ip))
-                    _ipCache.Remove(Ip);
-                _ipCache[Ip] = infoDTO;
-            }
-
+            //remove the oldest if we are at the cache limit
+            if (_ipCache.Count >= maxCacheSize)
+                _ipCache.Remove(_ipCache[0]);
+            _ipCache[Ip] = infoDTO;
         }
+    }
 
-        public void Dispose()
-        {
-            _cancellationTokenSource?.Dispose();
-        }
+    public void Dispose()
+    {
+        GC.SuppressFinalize(this);
     }
 }

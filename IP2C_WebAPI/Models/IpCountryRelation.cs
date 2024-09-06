@@ -1,7 +1,8 @@
-﻿namespace IP2C_WebAPI.DTO;
+﻿namespace IP2C_WebAPI.Models;
 
-public class IpInfoDTO(string twoLetterCode, string threeLetterCode, string countryName)
+public class IpCountryRelation(string ip, string countryName, string twoLetterCode, string threeLetterCode)
 {
+    public string Ip { get; set; } = ip;
     public string CountryName { get; set; } = countryName;
     public string TwoLetterCode { get; set; } = twoLetterCode;
     public string ThreeLetterCode { get; set; } = threeLetterCode;

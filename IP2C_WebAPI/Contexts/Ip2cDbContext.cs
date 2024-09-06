@@ -17,7 +17,7 @@ public partial class Ip2cDbContext : DbContext
 
     public virtual DbSet<Country> Countries { get; set; }
 
-    public virtual DbSet<Ipaddress> Ipaddresses { get; set; }
+    public virtual DbSet<IpAddress> Ipaddresses { get; set; }
 
     public virtual DbSet<IpReportDTO> IpReportDTOs { get; set; }
 
@@ -39,7 +39,7 @@ public partial class Ip2cDbContext : DbContext
                 .IsFixedLength();
         });
 
-        modelBuilder.Entity<Ipaddress>(entity =>
+        modelBuilder.Entity<IpAddress>(entity =>
         {
             entity.ToTable("IPAddresses");
 
