@@ -12,7 +12,6 @@ public class IpRenewalService : IHostedService, IDisposable
     private readonly ILogger<IpRenewalService> _logger;
     private readonly OrderedDictionary _ipCache;
     private readonly object _ipCacheLock;
-
     private readonly int maxCacheSize;
     public IpRenewalService(IServiceScopeFactory serviceScopeFactory, ILogger<IpRenewalService> logger, IConfiguration configuration)
     {
@@ -24,7 +23,6 @@ public class IpRenewalService : IHostedService, IDisposable
         maxCacheSize = configuration["IpCacheMaxSize"] == null ? 50 : int.Parse(configuration["IpCacheMaxSize"]);
         //populate cache from db
         _ipCache = new OrderedDictionary(maxCacheSize);
-
         foreach (var cacheEntry in _ip2cRepository.GetIpsWithCountryAsc(maxCacheSize))
         {
             _ipCache[cacheEntry.Ip] = new IpInfoDTO(cacheEntry.TwoLetterCode, cacheEntry.ThreeLetterCode, cacheEntry.CountryName);
@@ -70,10 +68,7 @@ public class IpRenewalService : IHostedService, IDisposable
                         if (ipInfo != null)
                         {
                             //we have to check if the country for this IP changed
-                            //which MAY happen to be a new country that does not exist in our db, so we must add it
-                            bool countryExists = countryIdCodes.ContainsKey(ipInfo.ThreeLetterCode);
-                            //if country does not exist, we add it to db
-                            if (!countryExists)
+                            if (!countryIdCodes.ContainsKey(ipInfo.ThreeLetterCode))
                             {
                                 Country countryToAdd = new Country(default, ipInfo.CountryName, ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, DateTime.Now);
                                 await _ip2cRepository.AddCountry(countryToAdd);
@@ -81,9 +76,11 @@ public class IpRenewalService : IHostedService, IDisposable
                             }
 
                             //update cache (only if changed)
-                            if (_ipCache[ipAddress.Ip] != null && ipAddress.Country != null && !ipAddress.Country.ThreeLetterCode.Equals(ipInfo.ThreeLetterCode))
-                                _ipCache[ipAddress.Ip] = new IpInfoDTO(ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, ipInfo.CountryName);
-
+                            lock (_ipCacheLock)
+                            {
+                                if (_ipCache[ipAddress.Ip] != null && ipAddress.Country != null && !ipAddress.Country.ThreeLetterCode.Equals(ipInfo.ThreeLetterCode))
+                                    _ipCache[ipAddress.Ip] = new IpInfoDTO(ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, ipInfo.CountryName);
+                            }
                             //update db, replace old values with new values ONLY if changes occured
                             if (ipAddress.Country != null && !ipAddress.Country.ThreeLetterCode.Equals(ipInfo.ThreeLetterCode))
                             {

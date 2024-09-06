@@ -76,13 +76,13 @@ public class Ip2cRepository(Ip2cDbContext ip2CDbContext)
                .AsNoTracking().FirstOrDefaultAsync();
     }
 
-    public List<IpCountryRelation> GetIpsWithCountryAsc(int maxSize)
+    public IQueryable<IpCountryRelation> GetIpsWithCountryAsc(int maxSize)
     {
         return (from ip in ip2CDbContext.Ipaddresses
                 join country in ip2CDbContext.Countries on ip.CountryId equals country.Id
                 orderby ip.UpdatedAt ascending
                 select new IpCountryRelation(ip.Ip, country.Name, country.TwoLetterCode, country.ThreeLetterCode))
-                            .Take(maxSize).ToList();
+                            .Take(maxSize);
 
     }
 }

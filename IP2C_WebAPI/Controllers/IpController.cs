@@ -59,16 +59,17 @@ public class IpController : ControllerBase
         _logger.LogError("GetIpInfo: Could not find Ip Info in db for IP : {ip}, calling IP2C service...", Ip);
 
         (IpInfoDTO i2pcInfo, IP2C_STATUS statusCode) = await _ip2cService.RetrieveIpInfo(Ip);
-        //if error
-        if (i2pcInfo == null)
+        if (statusCode != IP2C_STATUS.OK)
             return statusCode == IP2C_STATUS.API_ERROR ? NotFound("IP NOT FOUND") : Problem("INTERNAL ERROR");
 
-        //if OK update cache
+        //if OK update cache and DB
         _ipRenewalService.UpdateCacheEntry(Ip, i2pcInfo);
-        //update DB
         Country countryDb = await _ip2cRepository.GetCountryFromI2PcInfo(i2pcInfo);
         if (countryDb == null)
-            await _ip2cRepository.AddCountry(new Country(default, i2pcInfo.CountryName, i2pcInfo.TwoLetterCode, i2pcInfo.ThreeLetterCode, DateTime.Now));
+        {
+            countryDb = new Country(default, i2pcInfo.CountryName, i2pcInfo.TwoLetterCode, i2pcInfo.ThreeLetterCode, DateTime.Now);
+            await _ip2cRepository.AddCountry(countryDb);
+        }
         await _ip2cRepository.AddIpAddress(new IpAddress(default, countryDb.Id, Ip, DateTime.Now, DateTime.Now, default));
         _logger.LogInformation("GetIpInfo: Found Ip Info from I2PC service, returned to client");
 
@@ -80,29 +81,20 @@ public class IpController : ControllerBase
     public async Task<ActionResult<List<IpInfoDTO>>> GetIpReport([FromQuery] string[] countryCodes)
     {
         List<IpReportDTO> results;
-        //if no query parameters,  get all countries
+        //if no query parameters, get all countries
         if (countryCodes == null || countryCodes.Length == 0)
             results = await _ip2cRepository.GetAllIps();
-        //else, add to the WHERE clause the countries that the client wants
+        //else get the IPs with the countries specified
         else
         {
-            //validate countryCodes
-            foreach (var country in countryCodes)
+            if (countryCodes.Where(countryCode => countryCode == null || countryCode.Trim().Length != 2).Any())
             {
-                if (country == null || country.Trim().Length != 2)
-                {
-                    _logger.LogError("GetIpReport: At least one wrong country code received");
-                    return BadRequest("BAD COUNTRY CODE"); //400
-                }
+                _logger.LogError("GetIpReport: At least one wrong country code received");
+                return BadRequest("BAD COUNTRY CODE"); //400
             }
             results = await _ip2cRepository.GetAllIpsFromCountryCodes(countryCodes);
         }
-        if (results == null || results.Count == 0)
-        {
-            _logger.LogError("GetIpReport: No IPs were found!");
-            return NotFound("NO IP DATA FOUND");
-        }
-        _logger.LogInformation("GetIpReport: Report generated successfully");
+        _logger.LogInformation("GetIpReport: Report generated successfully. IPs count: {Count}", results.Count);
         return Ok(results);
     }
 }
