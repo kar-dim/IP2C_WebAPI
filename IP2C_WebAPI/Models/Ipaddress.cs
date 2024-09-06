@@ -2,6 +2,7 @@
 
 public class IpAddress(int id, int countryId, string ip, DateTime createdAt, DateTime updatedAt, Country country)
 {
+    public IpAddress() : this(default, default, default, default, default, default) { }
     public int Id { get; set; } = id;
     public int CountryId { get; set; } = countryId;
     public string Ip { get; set; } = ip;

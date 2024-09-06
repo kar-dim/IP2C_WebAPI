@@ -8,17 +8,18 @@ namespace IP2C_WebAPI.Services;
 public class IpRenewalService : IHostedService, IDisposable
 {
     private readonly Ip2cRepository _ip2cRepository;
-    private readonly Ip2cService _ip2CService;
+    private readonly Ip2cService _ip2cService;
     private readonly ILogger<IpRenewalService> _logger;
     private readonly OrderedDictionary _ipCache;
-    private readonly object ipCacheLock;
+    private readonly object _ipCacheLock;
 
     private readonly int maxCacheSize;
-    public IpRenewalService(Ip2cRepository ip2cRepository, Ip2cService ip2CService, ILogger<IpRenewalService> logger, IConfiguration configuration)
+    public IpRenewalService(IServiceScopeFactory serviceScopeFactory, ILogger<IpRenewalService> logger, IConfiguration configuration)
     {
-        _ip2cRepository = ip2cRepository;
-        _ip2CService = ip2CService;
-        ipCacheLock = new object();
+        var serviceProvider = serviceScopeFactory.CreateScope().ServiceProvider;
+        _ip2cRepository = serviceProvider.GetRequiredService<Ip2cRepository>();
+        _ip2cService = serviceProvider.GetRequiredService<Ip2cService>();
+        _ipCacheLock = new object();
         _logger = logger;
         maxCacheSize = configuration["IpCacheMaxSize"] == null ? 50 : int.Parse(configuration["IpCacheMaxSize"]);
         //populate cache from db
@@ -65,7 +66,7 @@ public class IpRenewalService : IHostedService, IDisposable
                     //update information for these 100 Ip addresses
                     foreach (var ipAddress in ipPage)
                     {
-                        (IpInfoDTO ipInfo, IP2C_STATUS result) = await _ip2CService.RetrieveIpInfo(ipAddress.Ip);
+                        (IpInfoDTO ipInfo, IP2C_STATUS result) = await _ip2cService.RetrieveIpInfo(ipAddress.Ip);
                         if (ipInfo != null)
                         {
                             //we have to check if the country for this IP changed
@@ -107,7 +108,7 @@ public class IpRenewalService : IHostedService, IDisposable
 
     public IpInfoDTO GetIpInformation(string Ip)
     {
-        lock (ipCacheLock)
+        lock (_ipCacheLock)
         {
             return _ipCache.Contains(Ip) ? (IpInfoDTO)_ipCache[Ip] : null;
         }
@@ -115,7 +116,7 @@ public class IpRenewalService : IHostedService, IDisposable
 
     public void UpdateCacheEntry(string Ip, IpInfoDTO infoDTO)
     {
-        lock (ipCacheLock)
+        lock (_ipCacheLock)
         {
             //remove the oldest if we are at the cache limit
             if (_ipCache.Count >= maxCacheSize)
