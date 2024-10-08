@@ -2,6 +2,7 @@ using IP2C_WebAPI.Contexts;
 using IP2C_WebAPI.Repositories;
 using IP2C_WebAPI.Services;
 using Microsoft.EntityFrameworkCore;
+using RestSharp;
 
 namespace IP2C_WebAPI;
 
@@ -25,6 +26,8 @@ public class Program
         //ip renewal service -> renews the IPs (local db and cache) by calling the IP2C API every 1 hour, also initializes the cache (from db) on startup
         builder.Services.AddSingleton<IpRenewalService>();
         builder.Services.AddHostedService(provider => provider.GetService<IpRenewalService>());
+        //Singleton RestClient for I2PC service rest calls
+        builder.Services.AddSingleton(provider => new RestClient("https://ip2c.org"));
 
         var app = builder.Build();
         if (app.Environment.IsDevelopment())

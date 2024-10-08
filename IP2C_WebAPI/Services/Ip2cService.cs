@@ -10,9 +10,9 @@ public enum IP2C_STATUS
     API_ERROR
 }
 
-public class Ip2cService(ILogger<Ip2cService> logger)
+//Service that calls IP2C Rest endpoint and retrieves IP Info
+public class Ip2cService(ILogger<Ip2cService> logger, RestClient client)
 {
-    private readonly RestClient client = new RestClient("https://ip2c.org");
     public async Task<(IpInfoDTO, IP2C_STATUS)> RetrieveIpInfo(string ip)
     {
         //GET request to -> https://ip2c.org/{ip}
