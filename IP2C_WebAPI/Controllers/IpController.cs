@@ -55,25 +55,25 @@ public class IpController : ControllerBase
             return Ok(info);
         }
 
-        //last try from i2pc service
+        //last try from ip2c service
         _logger.LogError("GetIpInfo: Could not find Ip Info in db for IP : {ip}, calling IP2C service...", Ip);
 
-        (IpInfoDTO i2pcInfo, IP2C_STATUS statusCode) = await _ip2cService.RetrieveIpInfo(Ip);
+        (IpInfoDTO ip2cInfo, IP2C_STATUS statusCode) = await _ip2cService.RetrieveIpInfo(Ip);
         if (statusCode != IP2C_STATUS.OK)
             return statusCode == IP2C_STATUS.API_ERROR ? NotFound("IP NOT FOUND") : Problem("INTERNAL ERROR");
 
         //if OK update cache and DB
-        _ipRenewalService.UpdateCacheEntry(Ip, i2pcInfo);
-        Country countryDb = await _ip2cRepository.GetCountryFromI2PcInfo(i2pcInfo);
+        _ipRenewalService.UpdateCacheEntry(Ip, ip2cInfo);
+        Country countryDb = await _ip2cRepository.GetCountryFromIP2CInfo(ip2cInfo);
         if (countryDb == null)
         {
-            countryDb = new Country(default, i2pcInfo.CountryName, i2pcInfo.TwoLetterCode, i2pcInfo.ThreeLetterCode, DateTime.Now);
+            countryDb = new Country(default, ip2cInfo.CountryName, ip2cInfo.TwoLetterCode, ip2cInfo.ThreeLetterCode, DateTime.Now);
             await _ip2cRepository.AddCountry(countryDb);
         }
         await _ip2cRepository.AddIpAddress(new IpAddress(default, countryDb.Id, Ip, DateTime.Now, DateTime.Now, default));
-        _logger.LogInformation("GetIpInfo: Found Ip Info from I2PC service, returned to client");
+        _logger.LogInformation("GetIpInfo: Found Ip Info from IP2C service, returned to client");
 
-        return Ok(i2pcInfo);
+        return Ok(ip2cInfo);
     }
 
     //Get IPs report

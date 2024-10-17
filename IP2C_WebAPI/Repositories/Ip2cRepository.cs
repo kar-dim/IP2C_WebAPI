@@ -39,12 +39,12 @@ public class Ip2cRepository(Ip2cDbContext ip2CDbContext)
         await ip2CDbContext.SaveChangesAsync();
     }
 
-    public async Task<Country> GetCountryFromI2PcInfo(IpInfoDTO i2pcInfo)
+    public async Task<Country> GetCountryFromIP2CInfo(IpInfoDTO ip2cInfo)
     {
         return await ip2CDbContext.Countries
-            .Where(country => country.TwoLetterCode.Equals(i2pcInfo.TwoLetterCode)
-                && country.ThreeLetterCode.Equals(i2pcInfo.ThreeLetterCode)
-                && country.Name.ToLower().Equals(i2pcInfo.CountryName.ToLower())).FirstOrDefaultAsync();
+            .Where(country => country.TwoLetterCode.Equals(ip2cInfo.TwoLetterCode)
+                && country.ThreeLetterCode.Equals(ip2cInfo.ThreeLetterCode)
+                && country.Name.ToLower().Equals(ip2cInfo.CountryName.ToLower())).FirstOrDefaultAsync();
     }
 
     public async Task<List<IpReportDTO>> GetAllIps()
