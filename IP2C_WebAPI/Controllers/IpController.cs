@@ -12,6 +12,8 @@ namespace IP2C_WebAPI.Controllers;
 public class IpController(Ip2cRepository repository, ILogger<IpController> logger, Ip2cService service, IpRenewalService renewalService) : ControllerBase
 {
     private static readonly Regex ipPattern = new Regex(@"^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}$");
+    private const string IP2C_BAD_IP = "BAD IP";
+    private const string IP2C_BAD_COUNTRY_CODE = "BAD COUNTRY CODE";
 
     //Get IP information
     [HttpGet("GetIpInfo/{Ip}")]
@@ -21,7 +23,7 @@ public class IpController(Ip2cRepository repository, ILogger<IpController> logge
         if (!ipPattern.IsMatch(Ip))
         {
             logger.LogError("GetIpInfo: BAD Ip received");
-            return BadRequest("BAD IP");
+            return BadRequest(IP2C_BAD_IP);
         }
         //first check cache
         IpInfoDTO ipInfo = renewalService.GetIpInformation(Ip);
@@ -79,7 +81,7 @@ public class IpController(Ip2cRepository repository, ILogger<IpController> logge
             if (countryCodes.Where(countryCode => countryCode == null || countryCode.Trim().Length != 2).Any())
             {
                 logger.LogError("GetIpReport: At least one wrong country code received");
-                return BadRequest("BAD COUNTRY CODE"); //400
+                return BadRequest(IP2C_BAD_COUNTRY_CODE); //400
             }
             results = await repository.GetAllIpsFromCountryCodes(countryCodes);
         }

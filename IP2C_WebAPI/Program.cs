@@ -24,6 +24,7 @@ public class Program
         builder.Services.AddScoped<Ip2cService>();
         builder.Services.AddScoped<Ip2cRepository>();
         //ip renewal service -> renews the IPs (local db and cache) by calling the IP2C API every 1 hour, also initializes the cache (from db) on startup
+        builder.Services.AddSingleton<CacheService>();
         builder.Services.AddSingleton<IpRenewalService>();
         builder.Services.AddHostedService(provider => provider.GetService<IpRenewalService>());
         //Singleton RestClient for IP2C service rest calls

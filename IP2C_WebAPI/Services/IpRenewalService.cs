@@ -1,7 +1,6 @@
 ﻿using IP2C_WebAPI.DTO;
 using IP2C_WebAPI.Models;
 using IP2C_WebAPI.Repositories;
-using System.Collections.Specialized;
 
 namespace IP2C_WebAPI.Services;
 
@@ -9,25 +8,20 @@ public class IpRenewalService : IHostedService, IDisposable
 {
     private readonly Ip2cRepository repository;
     private readonly Ip2cService service;
+    private readonly CacheService cache;
     private readonly ILogger<IpRenewalService> logger;
-    private readonly OrderedDictionary cache;
-    private readonly object cacheLock;
-    private readonly int maxCacheSize;
-    public IpRenewalService(IServiceScopeFactory serviceScopeFactory, ILogger<IpRenewalService> ip2cLogger, IConfiguration configuration)
+    
+    public IpRenewalService(IServiceScopeFactory serviceScopeFactory, CacheService cacheService, ILogger<IpRenewalService> ip2cLogger, IConfiguration configuration)
     {
         var serviceProvider = serviceScopeFactory.CreateScope().ServiceProvider;
         repository = serviceProvider.GetRequiredService<Ip2cRepository>();
         service = serviceProvider.GetRequiredService<Ip2cService>();
-        cacheLock = new object();
         logger = ip2cLogger;
-        maxCacheSize = configuration["IpCacheMaxSize"] == null ? 50 : int.Parse(configuration["IpCacheMaxSize"]);
+        cache = cacheService;
         //populate cache from db
-        cache = new OrderedDictionary(maxCacheSize);
-        foreach (var cacheEntry in repository.GetIpsWithCountryAsc(maxCacheSize))
-        {
-            cache[cacheEntry.Ip] = new IpInfoDTO(cacheEntry.TwoLetterCode, cacheEntry.ThreeLetterCode, cacheEntry.CountryName);
-        }
+        cache.InitializeCache();
     }
+
     public Task StartAsync(CancellationToken cancellationToken)
     {
         Task.Run(async () => await RenewIpsLoop(cancellationToken), cancellationToken);
@@ -49,7 +43,7 @@ public class IpRenewalService : IHostedService, IDisposable
             List<Country> countries = await repository.GetCountriesAsync();
             if (countries.Count != 0)
             {
-                Dictionary<string, int> countryIdCodes = new Dictionary<string, int>();
+                Dictionary<string, int> countryIdCodes = [];
                 foreach (var country in countries)
                 {
                     countryIdCodes[country.ThreeLetterCode] = country.Id;
@@ -65,31 +59,31 @@ public class IpRenewalService : IHostedService, IDisposable
                     foreach (var ipAddress in ipPage)
                     {
                         (IpInfoDTO ipInfo, IP2C_STATUS result) = await service.RetrieveIpInfo(ipAddress.Ip);
-                        if (ipInfo != null)
+                        if (ipInfo == null)
+                            continue;
+                        
+                        //we have to check if the country for this IP changed
+                        if (!countryIdCodes.TryGetValue(ipInfo.ThreeLetterCode, out int countryId))
                         {
-                            //we have to check if the country for this IP changed
-                            if (!countryIdCodes.ContainsKey(ipInfo.ThreeLetterCode))
-                            {
-                                Country countryToAdd = new Country(default, ipInfo.CountryName, ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, DateTime.Now);
-                                await repository.AddCountry(countryToAdd);
-                                countryIdCodes[ipInfo.ThreeLetterCode] = countryToAdd.Id;
-                            }
-
-                            //update cache (only if changed)
-                            lock (cacheLock)
-                            {
-                                if (cache[ipAddress.Ip] != null && ipAddress.Country != null && !ipAddress.Country.ThreeLetterCode.Equals(ipInfo.ThreeLetterCode))
-                                    cache[ipAddress.Ip] = new IpInfoDTO(ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, ipInfo.CountryName);
-                            }
-                            //update db, replace old values with new values ONLY if changes occured
-                            if (ipAddress.Country != null && !ipAddress.Country.ThreeLetterCode.Equals(ipInfo.ThreeLetterCode))
-                            {
-                                ipAddress.Country = default;
-                                ipAddress.CountryId = countryIdCodes[ipInfo.ThreeLetterCode];
-                                ipAddress.UpdatedAt = DateTime.Now;
-                                repository.UpdateIpAddress(ipAddress);
-                            }
+                            Country countryToAdd = new Country(default, ipInfo.CountryName, ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, DateTime.Now);
+                            await repository.AddCountry(countryToAdd);
+                            countryId = countryToAdd.Id;
+                            countryIdCodes[ipInfo.ThreeLetterCode] = countryId;
                         }
+
+                        //update cache (only if changed)
+                        if (cache.GetIpInformation(ipAddress.Ip) != null && ipAddress.Country != null && !ipAddress.Country.ThreeLetterCode.Equals(ipInfo.ThreeLetterCode))
+                            cache.UpdateCacheEntry(ipAddress.Ip, new IpInfoDTO(ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, ipInfo.CountryName));
+                            
+                        //update db, replace old values with new values ONLY if changes occured
+                        if (ipAddress.Country != null && !ipAddress.Country.ThreeLetterCode.Equals(ipInfo.ThreeLetterCode))
+                        {
+                            ipAddress.Country = default;
+                            ipAddress.CountryId = countryId;
+                            ipAddress.UpdatedAt = DateTime.Now;
+                            repository.UpdateIpAddress(ipAddress);
+                        }
+                        
                     }
                     //update all IPs at once
                     await repository.SaveChangesAsync();
@@ -105,21 +99,12 @@ public class IpRenewalService : IHostedService, IDisposable
 
     public IpInfoDTO GetIpInformation(string Ip)
     {
-        lock (cacheLock)
-        {
-            return cache.Contains(Ip) ? (IpInfoDTO)cache[Ip] : null;
-        }
+        return cache.GetIpInformation(Ip);
     }
 
     public void UpdateCacheEntry(string Ip, IpInfoDTO infoDTO)
     {
-        lock (cacheLock)
-        {
-            //remove the oldest if we are at the cache limit
-            if (cache.Count >= maxCacheSize)
-                cache.Remove(cache[0]);
-            cache[Ip] = infoDTO;
-        }
+        cache.UpdateCacheEntry(Ip, infoDTO);
     }
 
     public void Dispose()

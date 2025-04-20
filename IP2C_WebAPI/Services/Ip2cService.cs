@@ -2,7 +2,6 @@
 using RestSharp;
 
 namespace IP2C_WebAPI.Services;
-
 public enum IP2C_STATUS
 {
     OK,

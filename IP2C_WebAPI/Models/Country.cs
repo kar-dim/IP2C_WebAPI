@@ -8,5 +8,5 @@ public class Country(int id, string name, string twolettercode, string threelett
     public string TwoLetterCode { get; set; } = twolettercode;
     public string ThreeLetterCode { get; set; } = threelettercode;
     public DateTime CreatedAt { get; set; } = createdAt;
-    public ICollection<IpAddress> Ipaddresses { get; set; } = new List<IpAddress>();
+    public ICollection<IpAddress> Ipaddresses { get; set; } = [];
 }
