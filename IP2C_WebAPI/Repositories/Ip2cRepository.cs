@@ -5,43 +5,43 @@ using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 
 namespace IP2C_WebAPI.Repositories;
-public class Ip2cRepository(Ip2cDbContext ip2CDbContext)
+public class Ip2cRepository(Ip2cDbContext dbContext)
 {
     public async Task SaveChangesAsync()
     {
-        await ip2CDbContext.SaveChangesAsync();
+        await dbContext.SaveChangesAsync();
     }
 
     public async Task AddCountry(Country country)
     {
-        ip2CDbContext.Countries.Add(country);
-        await ip2CDbContext.SaveChangesAsync();
+        dbContext.Countries.Add(country);
+        await dbContext.SaveChangesAsync();
     }
 
     public void UpdateIpAddress(IpAddress address)
     {
-        ip2CDbContext.Ipaddresses.Update(address);
+        dbContext.Ipaddresses.Update(address);
     }
 
     public async Task<List<Country>> GetCountriesAsync()
     {
-        return await ip2CDbContext.Countries.ToListAsync();
+        return await dbContext.Countries.ToListAsync();
     }
 
     public async Task<List<IpAddress>> GetIpAddressesRangeAsync(int lastId)
     {
-        return await ip2CDbContext.Ipaddresses.OrderBy(x => x.Id).Where(x => x.Id > lastId).Take(100).ToListAsync(); //read 100 per batch.ToListAsync();
+        return await dbContext.Ipaddresses.OrderBy(x => x.Id).Where(x => x.Id > lastId).Take(100).ToListAsync(); //read 100 per batch.ToListAsync();
     }
 
     public async Task AddIpAddress(IpAddress address)
     {
-        ip2CDbContext.Ipaddresses.Add(address);
-        await ip2CDbContext.SaveChangesAsync();
+        dbContext.Ipaddresses.Add(address);
+        await dbContext.SaveChangesAsync();
     }
 
     public async Task<Country> GetCountryFromIP2CInfo(IpInfoDTO ip2cInfo)
     {
-        return await ip2CDbContext.Countries
+        return await dbContext.Countries
             .Where(country => country.TwoLetterCode.Equals(ip2cInfo.TwoLetterCode)
                 && country.ThreeLetterCode.Equals(ip2cInfo.ThreeLetterCode)
                 && country.Name.ToLower().Equals(ip2cInfo.CountryName.ToLower())).FirstOrDefaultAsync();
@@ -49,7 +49,7 @@ public class Ip2cRepository(Ip2cDbContext ip2CDbContext)
 
     public async Task<List<IpReportDTO>> GetAllIps()
     {
-        return await ip2CDbContext.IpReportDTOs
+        return await dbContext.IpReportDTOs
             .FromSqlRaw(
             $"SELECT Countries.Name, COUNT(Countries.NAME) AS 'AddressesCount', MAX(IPAddresses.UpdatedAt) AS 'LastAddressUpdated' " +
             $"FROM Countries " +
@@ -61,7 +61,7 @@ public class Ip2cRepository(Ip2cDbContext ip2CDbContext)
     {
         string countryCodesSqlClause = countryCodes.Length == 1 ? "WHERE Countries.TwoLetterCode = @p0" : "WHERE Countries.TwoLetterCode IN (" + string.Join(", ", countryCodes.Select((_, i) => $"@p{i}")) + ")";
         object[] parameterArray = countryCodes.Select((val, i) => new SqlParameter($"@p{i}", val)).ToArray();
-        return await ip2CDbContext.IpReportDTOs.FromSqlRaw(
+        return await dbContext.IpReportDTOs.FromSqlRaw(
             $"SELECT Countries.Name, COUNT(Countries.NAME) AS 'AddressesCount', MAX(IPAddresses.UpdatedAt) AS 'LastAddressUpdated' " +
             $"FROM Countries INNER JOIN IPAddresses ON IPAddresses.CountryId = Countries.Id " + countryCodesSqlClause + " " +
             "GROUP BY Countries.Name", parameterArray).AsNoTracking().ToListAsync();
@@ -69,8 +69,8 @@ public class Ip2cRepository(Ip2cDbContext ip2CDbContext)
 
     public async Task<IpCountryRelation> GetIpWithCountry(string Ip)
     {
-        return await (from ip in ip2CDbContext.Ipaddresses
-                      join country in ip2CDbContext.Countries on ip.CountryId equals country.Id
+        return await (from ip in dbContext.Ipaddresses
+                      join country in dbContext.Countries on ip.CountryId equals country.Id
                       where ip.Ip == Ip
                       select new IpCountryRelation(ip.Ip, country.Name, country.TwoLetterCode, country.ThreeLetterCode))
                .AsNoTracking().FirstOrDefaultAsync();
@@ -78,8 +78,8 @@ public class Ip2cRepository(Ip2cDbContext ip2CDbContext)
 
     public IQueryable<IpCountryRelation> GetIpsWithCountryAsc(int maxSize)
     {
-        return (from ip in ip2CDbContext.Ipaddresses
-                join country in ip2CDbContext.Countries on ip.CountryId equals country.Id
+        return (from ip in dbContext.Ipaddresses
+                join country in dbContext.Countries on ip.CountryId equals country.Id
                 orderby ip.UpdatedAt ascending
                 select new IpCountryRelation(ip.Ip, country.Name, country.TwoLetterCode, country.ThreeLetterCode))
                             .Take(maxSize);

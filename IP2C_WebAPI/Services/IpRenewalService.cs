@@ -7,25 +7,25 @@ namespace IP2C_WebAPI.Services;
 
 public class IpRenewalService : IHostedService, IDisposable
 {
-    private readonly Ip2cRepository _ip2cRepository;
-    private readonly Ip2cService _ip2cService;
-    private readonly ILogger<IpRenewalService> _logger;
-    private readonly OrderedDictionary _ipCache;
-    private readonly object _ipCacheLock;
+    private readonly Ip2cRepository repository;
+    private readonly Ip2cService service;
+    private readonly ILogger<IpRenewalService> logger;
+    private readonly OrderedDictionary cache;
+    private readonly object cacheLock;
     private readonly int maxCacheSize;
-    public IpRenewalService(IServiceScopeFactory serviceScopeFactory, ILogger<IpRenewalService> logger, IConfiguration configuration)
+    public IpRenewalService(IServiceScopeFactory serviceScopeFactory, ILogger<IpRenewalService> ip2cLogger, IConfiguration configuration)
     {
         var serviceProvider = serviceScopeFactory.CreateScope().ServiceProvider;
-        _ip2cRepository = serviceProvider.GetRequiredService<Ip2cRepository>();
-        _ip2cService = serviceProvider.GetRequiredService<Ip2cService>();
-        _ipCacheLock = new object();
-        _logger = logger;
+        repository = serviceProvider.GetRequiredService<Ip2cRepository>();
+        service = serviceProvider.GetRequiredService<Ip2cService>();
+        cacheLock = new object();
+        logger = ip2cLogger;
         maxCacheSize = configuration["IpCacheMaxSize"] == null ? 50 : int.Parse(configuration["IpCacheMaxSize"]);
         //populate cache from db
-        _ipCache = new OrderedDictionary(maxCacheSize);
-        foreach (var cacheEntry in _ip2cRepository.GetIpsWithCountryAsc(maxCacheSize))
+        cache = new OrderedDictionary(maxCacheSize);
+        foreach (var cacheEntry in repository.GetIpsWithCountryAsc(maxCacheSize))
         {
-            _ipCache[cacheEntry.Ip] = new IpInfoDTO(cacheEntry.TwoLetterCode, cacheEntry.ThreeLetterCode, cacheEntry.CountryName);
+            cache[cacheEntry.Ip] = new IpInfoDTO(cacheEntry.TwoLetterCode, cacheEntry.ThreeLetterCode, cacheEntry.CountryName);
         }
     }
     public Task StartAsync(CancellationToken cancellationToken)
@@ -42,11 +42,11 @@ public class IpRenewalService : IHostedService, IDisposable
     //main service loop, renews the IPs by using the ip2c service and then sleeps for 1 hour
     private async Task RenewIpsLoop(CancellationToken cancellationToken)
     {
-        _logger.LogInformation("RenewIpsLoop called");
+        logger.LogInformation("RenewIpsLoop called");
         while (!cancellationToken.IsCancellationRequested)
         {
             //get all the countries from our db first
-            List<Country> countries = await _ip2cRepository.GetCountriesAsync();
+            List<Country> countries = await repository.GetCountriesAsync();
             if (countries.Count != 0)
             {
                 Dictionary<string, int> countryIdCodes = new Dictionary<string, int>();
@@ -58,28 +58,28 @@ public class IpRenewalService : IHostedService, IDisposable
                 int lastId = 6; //in our sample db the minimum id = 6
                 while (true)
                 {
-                    var ipPage = await _ip2cRepository.GetIpAddressesRangeAsync(lastId);
+                    var ipPage = await repository.GetIpAddressesRangeAsync(lastId);
                     if (ipPage.Count == 0)
                         break;
                     //update information for these 100 Ip addresses
                     foreach (var ipAddress in ipPage)
                     {
-                        (IpInfoDTO ipInfo, IP2C_STATUS result) = await _ip2cService.RetrieveIpInfo(ipAddress.Ip);
+                        (IpInfoDTO ipInfo, IP2C_STATUS result) = await service.RetrieveIpInfo(ipAddress.Ip);
                         if (ipInfo != null)
                         {
                             //we have to check if the country for this IP changed
                             if (!countryIdCodes.ContainsKey(ipInfo.ThreeLetterCode))
                             {
                                 Country countryToAdd = new Country(default, ipInfo.CountryName, ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, DateTime.Now);
-                                await _ip2cRepository.AddCountry(countryToAdd);
+                                await repository.AddCountry(countryToAdd);
                                 countryIdCodes[ipInfo.ThreeLetterCode] = countryToAdd.Id;
                             }
 
                             //update cache (only if changed)
-                            lock (_ipCacheLock)
+                            lock (cacheLock)
                             {
-                                if (_ipCache[ipAddress.Ip] != null && ipAddress.Country != null && !ipAddress.Country.ThreeLetterCode.Equals(ipInfo.ThreeLetterCode))
-                                    _ipCache[ipAddress.Ip] = new IpInfoDTO(ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, ipInfo.CountryName);
+                                if (cache[ipAddress.Ip] != null && ipAddress.Country != null && !ipAddress.Country.ThreeLetterCode.Equals(ipInfo.ThreeLetterCode))
+                                    cache[ipAddress.Ip] = new IpInfoDTO(ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, ipInfo.CountryName);
                             }
                             //update db, replace old values with new values ONLY if changes occured
                             if (ipAddress.Country != null && !ipAddress.Country.ThreeLetterCode.Equals(ipInfo.ThreeLetterCode))
@@ -87,38 +87,38 @@ public class IpRenewalService : IHostedService, IDisposable
                                 ipAddress.Country = default;
                                 ipAddress.CountryId = countryIdCodes[ipInfo.ThreeLetterCode];
                                 ipAddress.UpdatedAt = DateTime.Now;
-                                _ip2cRepository.UpdateIpAddress(ipAddress);
+                                repository.UpdateIpAddress(ipAddress);
                             }
                         }
                     }
                     //update all IPs at once
-                    await _ip2cRepository.SaveChangesAsync();
+                    await repository.SaveChangesAsync();
                     lastId += 100;
                 }
 
             }
             //sleep for 1 hour
-            _logger.LogInformation("Service will sleep for 1 hour");
+            logger.LogInformation("Service will sleep for 1 hour");
             await Task.Delay(TimeSpan.FromHours(1), cancellationToken);
         }
     }
 
     public IpInfoDTO GetIpInformation(string Ip)
     {
-        lock (_ipCacheLock)
+        lock (cacheLock)
         {
-            return _ipCache.Contains(Ip) ? (IpInfoDTO)_ipCache[Ip] : null;
+            return cache.Contains(Ip) ? (IpInfoDTO)cache[Ip] : null;
         }
     }
 
     public void UpdateCacheEntry(string Ip, IpInfoDTO infoDTO)
     {
-        lock (_ipCacheLock)
+        lock (cacheLock)
         {
             //remove the oldest if we are at the cache limit
-            if (_ipCache.Count >= maxCacheSize)
-                _ipCache.Remove(_ipCache[0]);
-            _ipCache[Ip] = infoDTO;
+            if (cache.Count >= maxCacheSize)
+                cache.Remove(cache[0]);
+            cache[Ip] = infoDTO;
         }
     }
 
