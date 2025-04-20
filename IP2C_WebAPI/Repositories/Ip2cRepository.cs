@@ -44,7 +44,7 @@ public class Ip2cRepository(Ip2cDbContext dbContext)
         return await dbContext.Countries
             .Where(country => country.TwoLetterCode == ip2cInfo.TwoLetterCode
                 && country.ThreeLetterCode == ip2cInfo.ThreeLetterCode
-                && string.Equals(country.Name, ip2cInfo.CountryName, StringComparison.OrdinalIgnoreCase)).FirstOrDefaultAsync();
+                && country.Name.ToLower() == ip2cInfo.CountryName.ToLower()).FirstOrDefaultAsync();
     }
 
     public async Task<List<IpReportDTO>> GetAllIps()

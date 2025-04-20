@@ -11,7 +11,7 @@ public class IpRenewalService : IHostedService, IDisposable
     private readonly CacheService cache;
     private readonly ILogger<IpRenewalService> logger;
     
-    public IpRenewalService(IServiceScopeFactory serviceScopeFactory, CacheService cacheService, ILogger<IpRenewalService> ip2cLogger, IConfiguration configuration)
+    public IpRenewalService(IServiceScopeFactory serviceScopeFactory, CacheService cacheService, ILogger<IpRenewalService> ip2cLogger)
     {
         var serviceProvider = serviceScopeFactory.CreateScope().ServiceProvider;
         repository = serviceProvider.GetRequiredService<Ip2cRepository>();
@@ -95,16 +95,6 @@ public class IpRenewalService : IHostedService, IDisposable
             logger.LogInformation("Service will sleep for 1 hour");
             await Task.Delay(TimeSpan.FromHours(1), cancellationToken);
         }
-    }
-
-    public IpInfoDTO GetIpInformation(string Ip)
-    {
-        return cache.GetIpInformation(Ip);
-    }
-
-    public void UpdateCacheEntry(string Ip, IpInfoDTO infoDTO)
-    {
-        cache.UpdateCacheEntry(Ip, infoDTO);
     }
 
     public void Dispose()

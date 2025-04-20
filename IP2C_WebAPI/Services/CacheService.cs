@@ -11,9 +11,9 @@ namespace IP2C_WebAPI.Services
         private readonly object cacheLock;
         private readonly int maxCacheSize;
 
-        public CacheService(IConfiguration configuration, Ip2cRepository ip2cRepository)
+        public CacheService(IConfiguration configuration, IServiceScopeFactory serviceScopeFactory)
         {
-            repository = ip2cRepository;
+            repository = serviceScopeFactory.CreateScope().ServiceProvider.GetRequiredService<Ip2cRepository>();
             cacheLock = new object();
             maxCacheSize = configuration["IpCacheMaxSize"] == null ? 50 : int.Parse(configuration["IpCacheMaxSize"]);
             cache = new OrderedDictionary(maxCacheSize);
