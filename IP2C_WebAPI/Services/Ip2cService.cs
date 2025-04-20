@@ -4,15 +4,11 @@ using IP2C_WebAPI.Models;
 using IP2C_WebAPI.Repositories;
 using Microsoft.AspNetCore.Mvc;
 using RestSharp;
+using System.Runtime;
 using System.Text.RegularExpressions;
 
 namespace IP2C_WebAPI.Services;
-public enum IP2C_STATUS
-{
-    OK,
-    CONNECTION_ERROR,
-    API_ERROR
-}
+
 
 //Service that implements the business logic of IP2C operations
 public class Ip2cService(ILogger<Ip2cService> logger, CacheService cacheService, RestClient client, Ip2cRepository repository)
@@ -20,24 +16,24 @@ public class Ip2cService(ILogger<Ip2cService> logger, CacheService cacheService,
     private static readonly Regex ipPattern = new Regex(@"^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}$");
 
     //calls IP2C Rest endpoint and retrieves IP Info
-    public async Task<(IpInfoDTO, IP2C_STATUS)> RetrieveIpInfo(string ip)
+    public async Task<Ip2cResult> RetrieveIpInfo(string ip)
     {
         //GET request to -> https://ip2c.org/{ip}
         var response = await client.ExecuteAsync(new RestRequest(ip, Method.Get));
         if (response == null || string.IsNullOrEmpty(response.Content))
         {
             logger.LogError("Ip2c API connection error...");
-            return (null, IP2C_STATUS.CONNECTION_ERROR);
+            return new Ip2cResult(null, IP2C_STATUS.CONNECTION_ERROR);
         }
         //ip2c returns in format "1;CD;COD;COUNTRY" (string, no JSON)
         string[] parts = response.Content.Split(';');
         if (!parts[0].Equals("1"))
         {
             logger.LogError("Ip2c API ip not found error...");
-            return (null, IP2C_STATUS.API_ERROR);
+            return new Ip2cResult(null, IP2C_STATUS.API_ERROR);
         }
         //truncate to 50 characters for db safety
-        return (new IpInfoDTO(parts[1], parts[2], parts[3][..Math.Min(parts[3].Length, 50)]), IP2C_STATUS.OK);
+        return new Ip2cResult(new IpInfoDTO(parts[1], parts[2], parts[3][..Math.Min(parts[3].Length, 50)]), IP2C_STATUS.OK);
     }
 
     public async Task<IActionResult> GetIpInfo(string Ip)
@@ -72,11 +68,12 @@ public class Ip2cService(ILogger<Ip2cService> logger, CacheService cacheService,
         //last try from ip2c service
         logger.LogError("GetIpInfo: Could not find Ip Info in db for IP : {ip}, calling IP2C service...", Ip);
 
-        (IpInfoDTO ip2cInfo, IP2C_STATUS statusCode) = await RetrieveIpInfo(Ip);
-        if (statusCode != IP2C_STATUS.OK)
-            return statusCode == IP2C_STATUS.API_ERROR ? Response.IP_NOT_FOUND : Response.INTERNAL_ERROR;
+        var result = await RetrieveIpInfo(Ip);
+        if (!result.IsSuccess)
+            return result.Status == IP2C_STATUS.API_ERROR ? Response.IP_NOT_FOUND : Response.INTERNAL_ERROR;
 
         //if OK update cache and DB
+        var ip2cInfo = result.IpInfo;
         cacheService.UpdateCacheEntry(Ip, ip2cInfo);
         Country countryDb = await repository.GetCountryFromIP2CInfo(ip2cInfo);
         if (countryDb == null)

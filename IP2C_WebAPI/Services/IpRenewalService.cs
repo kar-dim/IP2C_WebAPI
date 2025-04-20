@@ -58,14 +58,15 @@ public class IpRenewalService : IHostedService, IDisposable
                     //update information for these 100 Ip addresses
                     foreach (var ipAddress in ipPage)
                     {
-                        (IpInfoDTO ipInfo, IP2C_STATUS result) = await service.RetrieveIpInfo(ipAddress.Ip);
-                        if (ipInfo == null)
+                        var result = await service.RetrieveIpInfo(ipAddress.Ip);
+                        if (!result.IsSuccess)
                             continue;
                         
+                        var ipInfo = result.IpInfo;
                         //we have to check if the country for this IP changed
                         if (!countryIdCodes.TryGetValue(ipInfo.ThreeLetterCode, out int countryId))
                         {
-                            Country countryToAdd = new Country(default, ipInfo.CountryName, ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, DateTime.Now);
+                            var countryToAdd = new Country(default, ipInfo.CountryName, ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, DateTime.Now);
                             await repository.AddCountry(countryToAdd);
                             countryId = countryToAdd.Id;
                             countryIdCodes[ipInfo.ThreeLetterCode] = countryId;
