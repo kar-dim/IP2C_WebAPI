@@ -54,7 +54,7 @@ public class Ip2cService(ILogger<Ip2cService> logger, CacheService cacheService,
         logger.LogInformation("GetIpInfo: CACHE MISS for {ip}, checking in db..", Ip);
 
         //second try from db
-        IpCountryRelation entry = await repository.GetIpWithCountry(Ip);
+        IpCountryRelation entry = await repository.GetIpWithCountryAsync(Ip);
         //if entry is not null -> found in db
         if (entry != null)
         {
@@ -75,13 +75,13 @@ public class Ip2cService(ILogger<Ip2cService> logger, CacheService cacheService,
         //if OK update cache and DB
         var ip2cInfo = result.IpInfo;
         cacheService.UpdateCacheEntry(Ip, ip2cInfo);
-        Country countryDb = await repository.GetCountryFromIP2CInfo(ip2cInfo);
+        Country countryDb = await repository.GetCountryFromIP2CInfoAsync(ip2cInfo);
         if (countryDb == null)
         {
             countryDb = new Country(default, ip2cInfo.CountryName, ip2cInfo.TwoLetterCode, ip2cInfo.ThreeLetterCode, DateTime.Now);
-            await repository.AddCountry(countryDb);
+            await repository.AddCountryAsync(countryDb);
         }
-        await repository.AddIpAddress(new IpAddress(default, countryDb.Id, Ip, DateTime.Now, DateTime.Now, default));
+        await repository.AddIpAddressAsync(new IpAddress(default, countryDb.Id, Ip, DateTime.Now, DateTime.Now, default));
         logger.LogInformation("GetIpInfo: Found Ip Info from IP2C service, returned to client");
 
         return Response.Ok(ip2cInfo);
@@ -92,7 +92,7 @@ public class Ip2cService(ILogger<Ip2cService> logger, CacheService cacheService,
         List<IpReportDTO> results;
         //if no query parameters, get all countries
         if (countryCodes == null || countryCodes.Length == 0)
-            results = await repository.GetAllIps();
+            results = await repository.GetAllIpsAsync();
         //else get the IPs with the countries specified
         else
         {
@@ -101,7 +101,7 @@ public class Ip2cService(ILogger<Ip2cService> logger, CacheService cacheService,
                 logger.LogError("GetIpReport: At least one wrong country code received");
                 return Response.IP2C_BAD_COUNTRY_CODE; //400
             }
-            results = await repository.GetAllIpsFromCountryCodes(countryCodes);
+            results = await repository.GetAllIpsFromCountryCodesAsync(countryCodes);
         }
         logger.LogInformation("GetIpReport: Report generated successfully. IPs count: {Count}", results.Count);
         return Response.Ok(results);

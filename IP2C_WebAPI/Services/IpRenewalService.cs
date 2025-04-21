@@ -67,7 +67,7 @@ public class IpRenewalService : IHostedService, IDisposable
                         if (!countryIdCodes.TryGetValue(ipInfo.ThreeLetterCode, out int countryId))
                         {
                             var countryToAdd = new Country(default, ipInfo.CountryName, ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, DateTime.Now);
-                            await repository.AddCountry(countryToAdd);
+                            await repository.AddCountryAsync(countryToAdd);
                             countryId = countryToAdd.Id;
                             countryIdCodes[ipInfo.ThreeLetterCode] = countryId;
                         }

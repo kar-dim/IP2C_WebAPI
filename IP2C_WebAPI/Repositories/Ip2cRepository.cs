@@ -12,7 +12,7 @@ public class Ip2cRepository(Ip2cDbContext dbContext)
         await dbContext.SaveChangesAsync();
     }
 
-    public async Task AddCountry(Country country)
+    public async Task AddCountryAsync(Country country)
     {
         dbContext.Countries.Add(country);
         await dbContext.SaveChangesAsync();
@@ -33,13 +33,13 @@ public class Ip2cRepository(Ip2cDbContext dbContext)
         return await dbContext.Ipaddresses.OrderBy(x => x.Id).Where(x => x.Id > lastId).Take(100).ToListAsync(); //read 100 per batch.ToListAsync();
     }
 
-    public async Task AddIpAddress(IpAddress address)
+    public async Task AddIpAddressAsync(IpAddress address)
     {
         dbContext.Ipaddresses.Add(address);
         await dbContext.SaveChangesAsync();
     }
 
-    public async Task<Country> GetCountryFromIP2CInfo(IpInfoDTO ip2cInfo)
+    public async Task<Country> GetCountryFromIP2CInfoAsync(IpInfoDTO ip2cInfo)
     {
         return await dbContext.Countries
             .Where(country => country.TwoLetterCode == ip2cInfo.TwoLetterCode
@@ -47,7 +47,7 @@ public class Ip2cRepository(Ip2cDbContext dbContext)
                 && country.Name.ToLower() == ip2cInfo.CountryName.ToLower()).FirstOrDefaultAsync();
     }
 
-    public async Task<List<IpReportDTO>> GetAllIps()
+    public async Task<List<IpReportDTO>> GetAllIpsAsync()
     {
         return await dbContext.IpReportDTOs
             .FromSqlRaw(
@@ -57,7 +57,7 @@ public class Ip2cRepository(Ip2cDbContext dbContext)
             $"GROUP BY Countries.Name").AsNoTracking().ToListAsync();
     }
 
-    public async Task<List<IpReportDTO>> GetAllIpsFromCountryCodes(string[] countryCodes)
+    public async Task<List<IpReportDTO>> GetAllIpsFromCountryCodesAsync(string[] countryCodes)
     {
         string countryCodesSqlClause = countryCodes.Length == 1 ? "WHERE Countries.TwoLetterCode = @p0" : "WHERE Countries.TwoLetterCode IN (" + string.Join(", ", countryCodes.Select((_, i) => $"@p{i}")) + ")";
         object[] parameterArray = countryCodes.Select((val, i) => new SqlParameter($"@p{i}", val)).ToArray();
@@ -67,7 +67,7 @@ public class Ip2cRepository(Ip2cDbContext dbContext)
             "GROUP BY Countries.Name", parameterArray).AsNoTracking().ToListAsync();
     }
 
-    public async Task<IpCountryRelation> GetIpWithCountry(string Ip)
+    public async Task<IpCountryRelation> GetIpWithCountryAsync(string Ip)
     {
         return await (from ip in dbContext.Ipaddresses
                       join country in dbContext.Countries on ip.CountryId equals country.Id
