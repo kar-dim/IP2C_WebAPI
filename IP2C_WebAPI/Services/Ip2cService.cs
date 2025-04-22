@@ -20,16 +20,16 @@ public class Ip2cService(ILogger<Ip2cService> logger, CacheService cacheService,
     {
         //GET request to -> https://ip2c.org/{ip}
         var response = await client.ExecuteAsync(new RestRequest(ip, Method.Get));
-        if (response == null || string.IsNullOrEmpty(response.Content))
+        if (string.IsNullOrWhiteSpace(response?.Content))
         {
             logger.LogError("Ip2c API connection error...");
             return new Ip2cResult(null, IP2C_STATUS.CONNECTION_ERROR);
         }
         //ip2c returns in format "1;CD;COD;COUNTRY" (string, no JSON)
-        string[] parts = response.Content.Split(';');
-        if (!parts[0].Equals("1"))
+        var parts = response.Content.Split(';');
+        if (!parts[0].Equals("1") || parts.Length < 4)
         {
-            logger.LogError("Ip2c API ip not found error...");
+            logger.LogError("Ip2c API IP not found error...");
             return new Ip2cResult(null, IP2C_STATUS.API_ERROR);
         }
         //truncate to 50 characters for db safety
@@ -75,13 +75,13 @@ public class Ip2cService(ILogger<Ip2cService> logger, CacheService cacheService,
         //if OK update cache and DB
         ipInfo = result.IpInfo;
         cacheService.UpdateCacheEntry(Ip, ipInfo);
-        Country countryDb = await repository.GetCountryFromIP2CInfoAsync(ipInfo);
-        if (countryDb == null)
+        var countryRecord = await repository.GetCountryFromIP2CInfoAsync(ipInfo);
+        if (countryRecord == null)
         {
-            countryDb = new Country(default, ipInfo.CountryName, ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, DateTime.Now);
-            await repository.AddCountryAsync(countryDb);
+            countryRecord = new Country(default, ipInfo.CountryName, ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, DateTime.Now);
+            await repository.AddCountryAsync(countryRecord);
         }
-        await repository.AddIpAddressAsync(new IpAddress(default, countryDb.Id, Ip, DateTime.Now, DateTime.Now, default));
+        await repository.AddIpAddressAsync(new IpAddress(default, countryRecord.Id, Ip, DateTime.Now, DateTime.Now, default));
         logger.LogInformation("GetIpInfo: Found Ip Info from IP2C service, returned to client");
 
         return Response.Ok(ipInfo);
@@ -89,20 +89,15 @@ public class Ip2cService(ILogger<Ip2cService> logger, CacheService cacheService,
 
     public async Task<IActionResult> GetIpReport(string[] countryCodes)
     {
-        List<IpReportDTO> results;
-        //if no query parameters, get all countries
-        if (countryCodes == null || countryCodes.Length == 0)
-            results = await repository.GetAllIpsAsync();
-        //else get the IPs with the countries specified
-        else
+        if (countryCodes?.Any(code => string.IsNullOrWhiteSpace(code) || code.Trim().Length != 2) == true)
         {
-            if (countryCodes.Where(countryCode => countryCode == null || countryCode.Trim().Length != 2).Any())
-            {
-                logger.LogError("GetIpReport: At least one wrong country code received");
-                return Response.IP2C_BAD_COUNTRY_CODE; //400
-            }
-            results = await repository.GetAllIpsFromCountryCodesAsync(countryCodes);
+            logger.LogError("GetIpReport: At least one invalid country code received");
+            return Response.IP2C_BAD_COUNTRY_CODE;
         }
+
+        bool showAllIps = countryCodes == null || countryCodes.Length == 0;
+        var results = showAllIps ? await repository.GetAllIpsAsync() : await repository.GetAllIpsFromCountryCodesAsync(countryCodes);
+
         logger.LogInformation("GetIpReport: Report generated successfully. IPs count: {Count}", results.Count);
         return Response.Ok(results);
     }
