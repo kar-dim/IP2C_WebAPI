@@ -1,7 +1,6 @@
 ﻿using IP2C_WebAPI.Contexts;
 using IP2C_WebAPI.DTO;
 using IP2C_WebAPI.Models;
-using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 
 namespace IP2C_WebAPI.Repositories;
@@ -49,40 +48,37 @@ public class Ip2cRepository(Ip2cDbContext dbContext)
 
     public async Task<List<IpReportDTO>> GetAllIpsAsync()
     {
-        return await dbContext.IpReportDTOs
-            .FromSqlRaw(
-            $"SELECT Countries.Name, COUNT(Countries.NAME) AS 'AddressesCount', MAX(IPAddresses.UpdatedAt) AS 'LastAddressUpdated' " +
-            $"FROM Countries " +
-            $"INNER JOIN IPAddresses ON IPAddresses.CountryId = Countries.Id " +
-            $"GROUP BY Countries.Name").AsNoTracking().ToListAsync();
+        return await dbContext.Ipaddresses
+        .Where(ip => ip.Country != null)
+        .GroupBy(ip => ip.Country.Name)
+        .Select(group => new IpReportDTO(group.Key, group.Count(), group.Max(ip => ip.UpdatedAt)))
+        .AsNoTracking().ToListAsync();
     }
 
     public async Task<List<IpReportDTO>> GetAllIpsFromCountryCodesAsync(string[] countryCodes)
     {
-        string countryCodesSqlClause = countryCodes.Length == 1 ? "WHERE Countries.TwoLetterCode = @p0" : "WHERE Countries.TwoLetterCode IN (" + string.Join(", ", countryCodes.Select((_, i) => $"@p{i}")) + ")";
-        object[] parameterArray = countryCodes.Select((val, i) => new SqlParameter($"@p{i}", val)).ToArray();
-        return await dbContext.IpReportDTOs.FromSqlRaw(
-            $"SELECT Countries.Name, COUNT(Countries.NAME) AS 'AddressesCount', MAX(IPAddresses.UpdatedAt) AS 'LastAddressUpdated' " +
-            $"FROM Countries INNER JOIN IPAddresses ON IPAddresses.CountryId = Countries.Id " + countryCodesSqlClause + " " +
-            "GROUP BY Countries.Name", parameterArray).AsNoTracking().ToListAsync();
+        return await dbContext.Ipaddresses
+       .Where(ip => ip.Country != null && countryCodes.Contains(ip.Country.TwoLetterCode))
+       .GroupBy(ip => ip.Country.Name)
+       .Select(group => new IpReportDTO(group.Key, group.Count(), group.Max(ip => ip.UpdatedAt)))
+       .AsNoTracking().ToListAsync();
     }
 
     public async Task<IpCountryRelation> GetIpWithCountryAsync(string Ip)
     {
-        return await (from ip in dbContext.Ipaddresses
-                      join country in dbContext.Countries on ip.CountryId equals country.Id
-                      where ip.Ip == Ip
-                      select new IpCountryRelation(ip.Ip, country.Name, country.TwoLetterCode, country.ThreeLetterCode))
-               .AsNoTracking().FirstOrDefaultAsync();
+        return await dbContext.Ipaddresses
+        .Join(dbContext.Countries, ipAddr => ipAddr.CountryId, country => country.Id, (ipAddr, country) => new { ipAddr, country })
+        .Where(x => x.ipAddr.Ip == Ip)
+        .Select(x => new IpCountryRelation(x.ipAddr.Ip, x.country.Name, x.country.TwoLetterCode, x.country.ThreeLetterCode))
+        .AsNoTracking().FirstOrDefaultAsync();
     }
 
     public IQueryable<IpCountryRelation> GetIpsWithCountryAsc(int maxSize)
     {
-        return (from ip in dbContext.Ipaddresses
-                join country in dbContext.Countries on ip.CountryId equals country.Id
-                orderby ip.UpdatedAt ascending
-                select new IpCountryRelation(ip.Ip, country.Name, country.TwoLetterCode, country.ThreeLetterCode))
-                            .Take(maxSize);
-
+        return dbContext.Ipaddresses
+        .Join(dbContext.Countries, ip => ip.CountryId, country => country.Id, (ip, country) => new { ip, country })
+        .OrderBy(x => x.ip.UpdatedAt)
+        .Take(maxSize)
+        .Select(x => new IpCountryRelation(x.ip.Ip, x.country.Name, x.country.TwoLetterCode, x.country.ThreeLetterCode));
     }
 }

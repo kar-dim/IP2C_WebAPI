@@ -45,7 +45,7 @@ public class Ip2cService(ILogger<Ip2cService> logger, CacheService cacheService,
             return Response.IP2C_BAD_IP;
         }
         //first check cache
-        IpInfoDTO ipInfo = cacheService.GetIpInformation(Ip);
+        var ipInfo = cacheService.GetIpInformation(Ip);
         if (ipInfo != null)
         {
             logger.LogInformation("GetIpInfo: CACHE HIT for {ip} returned to client", Ip);
@@ -59,9 +59,9 @@ public class Ip2cService(ILogger<Ip2cService> logger, CacheService cacheService,
         if (entry != null)
         {
             logger.LogInformation("GetIpInfo: Found Ip Info in db, returned to client");
-            IpInfoDTO info = new IpInfoDTO(entry.TwoLetterCode, entry.ThreeLetterCode, entry.CountryName);
+            ipInfo = new IpInfoDTO(entry.TwoLetterCode, entry.ThreeLetterCode, entry.CountryName);
             //update cache
-            cacheService.UpdateCacheEntry(Ip, info);
+            cacheService.UpdateCacheEntry(Ip, ipInfo);
             return Response.Ok(ipInfo);
         }
 
@@ -73,18 +73,18 @@ public class Ip2cService(ILogger<Ip2cService> logger, CacheService cacheService,
             return result.Status == IP2C_STATUS.API_ERROR ? Response.IP_NOT_FOUND : Response.INTERNAL_ERROR;
 
         //if OK update cache and DB
-        var ip2cInfo = result.IpInfo;
-        cacheService.UpdateCacheEntry(Ip, ip2cInfo);
-        Country countryDb = await repository.GetCountryFromIP2CInfoAsync(ip2cInfo);
+        ipInfo = result.IpInfo;
+        cacheService.UpdateCacheEntry(Ip, ipInfo);
+        Country countryDb = await repository.GetCountryFromIP2CInfoAsync(ipInfo);
         if (countryDb == null)
         {
-            countryDb = new Country(default, ip2cInfo.CountryName, ip2cInfo.TwoLetterCode, ip2cInfo.ThreeLetterCode, DateTime.Now);
+            countryDb = new Country(default, ipInfo.CountryName, ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, DateTime.Now);
             await repository.AddCountryAsync(countryDb);
         }
         await repository.AddIpAddressAsync(new IpAddress(default, countryDb.Id, Ip, DateTime.Now, DateTime.Now, default));
         logger.LogInformation("GetIpInfo: Found Ip Info from IP2C service, returned to client");
 
-        return Response.Ok(ip2cInfo);
+        return Response.Ok(ipInfo);
     }
 
     public async Task<IActionResult> GetIpReport(string[] countryCodes)
