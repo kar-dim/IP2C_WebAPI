@@ -1,6 +1,7 @@
 using IP2C_WebAPI.Contexts;
 using IP2C_WebAPI.Repositories;
-using IP2C_WebAPI.Services;
+using IP2C_WebAPI.Services.Implementations;
+using IP2C_WebAPI.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using RestSharp;
 
@@ -21,12 +22,12 @@ public class Program
 
         //our custom services
         //ip2c service and repository
-        builder.Services.AddScoped<Ip2cService>();
+        builder.Services.AddScoped<IGeoIpService, GeoIpService>();
         builder.Services.AddScoped<Ip2cRepository>();
         //ip renewal service -> renews the IPs (local db and cache) by calling the IP2C API every 1 hour, also initializes the cache (from db) on startup
-        builder.Services.AddSingleton<CacheService>();
-        builder.Services.AddSingleton<IpRenewalService>();
-        builder.Services.AddHostedService(provider => provider.GetService<IpRenewalService>());
+        builder.Services.AddSingleton<ICacheService, CacheService>();
+        builder.Services.AddSingleton<IGeoIpRenewalService, GeoIpRenewalService>();
+        builder.Services.AddHostedService(provider => provider.GetService<IGeoIpRenewalService>());
         //Singleton RestClient for IP2C service rest calls
         builder.Services.AddSingleton(provider => new RestClient("https://ip2c.org"));
 

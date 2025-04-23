@@ -1,21 +1,22 @@
 ﻿using IP2C_WebAPI.DTO;
 using IP2C_WebAPI.Models;
 using IP2C_WebAPI.Repositories;
+using IP2C_WebAPI.Services.Interfaces;
 
-namespace IP2C_WebAPI.Services;
+namespace IP2C_WebAPI.Services.Implementations;
 
-public class IpRenewalService : IHostedService, IDisposable
+public class GeoIpRenewalService : IGeoIpRenewalService
 {
     private readonly Ip2cRepository repository;
-    private readonly Ip2cService service;
-    private readonly CacheService cache;
-    private readonly ILogger<IpRenewalService> logger;
+    private readonly IGeoIpService service;
+    private readonly ICacheService cache;
+    private readonly ILogger<GeoIpRenewalService> logger;
     
-    public IpRenewalService(IServiceScopeFactory serviceScopeFactory, CacheService cacheService, ILogger<IpRenewalService> ip2cLogger)
+    public GeoIpRenewalService(IServiceScopeFactory serviceScopeFactory, ICacheService cacheService, ILogger<GeoIpRenewalService> ip2cLogger)
     {
         var serviceProvider = serviceScopeFactory.CreateScope().ServiceProvider;
         repository = serviceProvider.GetRequiredService<Ip2cRepository>();
-        service = serviceProvider.GetRequiredService<Ip2cService>();
+        service = serviceProvider.GetRequiredService<IGeoIpService>();
         logger = ip2cLogger;
         cache = cacheService;
         //populate cache from db
@@ -34,7 +35,7 @@ public class IpRenewalService : IHostedService, IDisposable
     }
 
     //main service loop, renews the IPs by using the ip2c service and then sleeps for 1 hour
-    private async Task RenewIpsLoop(CancellationToken cancellationToken)
+    public async Task RenewIpsLoop(CancellationToken cancellationToken)
     {
         logger.LogInformation("RenewIpsLoop called");
         while (!cancellationToken.IsCancellationRequested)

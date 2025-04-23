@@ -1,11 +1,11 @@
-﻿using IP2C_WebAPI.Services;
+﻿using IP2C_WebAPI.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IP2C_WebAPI.Controllers;
 
 [Route("api/[controller]")]
 [ApiController]
-public class IpController(Ip2cService service) : ControllerBase
+public class IpController(IGeoIpService service) : ControllerBase
 {
     //Get IP information
     [HttpGet("GetIpInfo/{Ip}")]

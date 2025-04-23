@@ -2,16 +2,16 @@
 using IP2C_WebAPI.DTO;
 using IP2C_WebAPI.Models;
 using IP2C_WebAPI.Repositories;
+using IP2C_WebAPI.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using RestSharp;
-using System.Runtime;
 using System.Text.RegularExpressions;
 
-namespace IP2C_WebAPI.Services;
+namespace IP2C_WebAPI.Services.Implementations;
 
 
 //Service that implements the business logic of IP2C operations
-public class Ip2cService(ILogger<Ip2cService> logger, CacheService cacheService, RestClient client, Ip2cRepository repository)
+public class GeoIpService(ILogger<GeoIpService> logger, ICacheService cacheService, RestClient client, Ip2cRepository repository) : IGeoIpService
 {
     private static readonly Regex ipPattern = new Regex(@"^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}$");
 

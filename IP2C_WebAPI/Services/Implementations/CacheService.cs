@@ -1,10 +1,11 @@
 ﻿using IP2C_WebAPI.DTO;
 using IP2C_WebAPI.Repositories;
+using IP2C_WebAPI.Services.Interfaces;
 using System.Collections.Specialized;
 
-namespace IP2C_WebAPI.Services
+namespace IP2C_WebAPI.Services.Implementations
 {
-    public class CacheService
+    public class CacheService : ICacheService
     {
         private readonly Ip2cRepository repository;
         private readonly OrderedDictionary cache;
