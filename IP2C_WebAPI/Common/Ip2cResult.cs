@@ -8,11 +8,8 @@ namespace IP2C_WebAPI.Common
         CONNECTION_ERROR,
         API_ERROR
     }
-    public class Ip2cResult(IpInfoDTO ipInfo, IP2C_STATUS status)
+    public record Ip2cResult(IpInfoDTO IpInfo, IP2C_STATUS Status)
     {
-        public IpInfoDTO IpInfo { get; } = ipInfo;
-        public IP2C_STATUS Status { get; } = status;
-
         public bool IsSuccess => Status == IP2C_STATUS.OK;
     }
 }
