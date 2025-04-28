@@ -20,33 +20,29 @@ namespace IP2C_WebAPI.Services.Implementations
             cache = new OrderedDictionary(maxCacheSize);
         }
 
-        public void InitializeCache()
+        //All cache operations must execute under this method, in order to lock the cache, execute, and then release the lock
+        private T ExecuteWithCacheLock<T>(Func<T> action)
         {
             lock (cacheLock)
-            {
-                foreach (var cacheEntry in repository.GetIpsWithCountryAsc(maxCacheSize))
-                {
-                    cache[cacheEntry.Ip] = new IpInfoDTO(cacheEntry.TwoLetterCode, cacheEntry.ThreeLetterCode, cacheEntry.CountryName);
-                }
-            }
+                return action();
         }
-        public IpInfoDTO GetIpInformation(string Ip)
-        {
-            lock (cacheLock)
-            {
-                return cache.Contains(Ip) ? (IpInfoDTO)cache[Ip] : null;
-            }
-        }
+        private void ExecuteWithCacheLock(Action action) => ExecuteWithCacheLock(() => { action(); return true; });
 
-        public void UpdateCacheEntry(string Ip, IpInfoDTO infoDTO)
+        public void InitializeCache() => ExecuteWithCacheLock(() =>
         {
-            lock (cacheLock)
-            {
-                //remove the oldest if we are at the cache limit
-                if (cache.Count >= maxCacheSize)
-                    cache.Remove(cache[0]);
-                cache[Ip] = infoDTO;
-            }
-        }
+            foreach (var cacheEntry in repository.GetIpsWithCountryAsc(maxCacheSize))
+                cache[cacheEntry.Ip] = new IpInfoDTO(cacheEntry.TwoLetterCode, cacheEntry.ThreeLetterCode, cacheEntry.CountryName);
+        });
+
+        public IpInfoDTO GetIpInformation(string Ip) => ExecuteWithCacheLock(() =>
+            cache.Contains(Ip) ? (IpInfoDTO)cache[Ip] : null
+        );
+
+        public void UpdateCacheEntry(string Ip, IpInfoDTO infoDTO) => ExecuteWithCacheLock(() =>
+        {
+            if (cache.Count >= maxCacheSize)
+                cache.Remove(cache[0]);
+            cache[Ip] = infoDTO;
+        });
     }
 }
