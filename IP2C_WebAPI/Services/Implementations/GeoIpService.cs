@@ -13,7 +13,7 @@ namespace IP2C_WebAPI.Services.Implementations;
 //Service that implements the business logic of IP2C operations
 public class GeoIpService(ILogger<GeoIpService> logger, ICacheService cacheService, RestClient client, Ip2cRepository repository) : IGeoIpService
 {
-    private static readonly Regex ipPattern = new Regex(@"^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}$");
+    private static readonly Regex ipPattern = new Regex(@"^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}$", RegexOptions.Compiled);
 
     //calls IP2C Rest endpoint and retrieves IP Info
     public async Task<Ip2cResult> RetrieveIpInfo(string ip)
