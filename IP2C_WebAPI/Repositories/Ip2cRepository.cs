@@ -22,9 +22,10 @@ public class Ip2cRepository(Ip2cDbContext dbContext)
         dbContext.Ipaddresses.Update(address);
     }
 
-    public async Task<List<Country>> GetCountriesAsync()
+    public async Task<Dictionary<string, int>> GetCountriesAsDictAsync()
     {
-        return await dbContext.Countries.ToListAsync();
+        var countries = await dbContext.Countries.ToListAsync();
+        return countries.GroupBy(c => c.ThreeLetterCode).ToDictionary(g => g.Key, g => g.Last().Id);
     }
 
     public async Task<List<IpAddress>> GetIpAddressesRangeAsync(int lastId)
