@@ -10,6 +10,7 @@ namespace IP2C_WebAPI.Common
     }
     public record Ip2cResult(IpInfoDTO IpInfo, IP2C_STATUS Status)
     {
+        public Ip2cResult(IP2C_STATUS status) : this(null, status) { }
         public bool IsSuccess => Status == IP2C_STATUS.OK;
     }
 }

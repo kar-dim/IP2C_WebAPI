@@ -23,14 +23,14 @@ public class GeoIpService(ILogger<GeoIpService> logger, ICacheService cacheServi
         if (string.IsNullOrWhiteSpace(response?.Content))
         {
             logger.LogError("Ip2c API connection error...");
-            return new Ip2cResult(null, IP2C_STATUS.CONNECTION_ERROR);
+            return new Ip2cResult(IP2C_STATUS.CONNECTION_ERROR);
         }
         //ip2c returns in format "1;CD;COD;COUNTRY" (string, no JSON)
         var parts = response.Content.Split(';');
         if (!parts[0].Equals("1") || parts.Length < 4)
         {
             logger.LogError("Ip2c API IP not found error...");
-            return new Ip2cResult(null, IP2C_STATUS.API_ERROR);
+            return new Ip2cResult(IP2C_STATUS.API_ERROR);
         }
         //truncate to 50 characters for db safety
         return new Ip2cResult(new IpInfoDTO(parts[1], parts[2], parts[3][..Math.Min(parts[3].Length, 50)]), IP2C_STATUS.OK);
