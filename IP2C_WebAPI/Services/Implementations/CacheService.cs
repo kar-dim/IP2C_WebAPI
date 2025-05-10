@@ -34,14 +34,12 @@ namespace IP2C_WebAPI.Services.Implementations
                 cache[cacheEntry.Ip] = new IpInfoDTO(cacheEntry.TwoLetterCode, cacheEntry.ThreeLetterCode, cacheEntry.CountryName);
         });
 
-        public IpInfoDTO GetIpInformation(string Ip) => ExecuteWithCacheLock(() =>
-            cache.Contains(Ip) ? (IpInfoDTO)cache[Ip] : null
-        );
+        public IpInfoDTO GetIpInformation(string Ip) => ExecuteWithCacheLock(() => cache[Ip] is IpInfoDTO info ? info : null);
 
         public void UpdateCacheEntry(string Ip, IpInfoDTO infoDTO) => ExecuteWithCacheLock(() =>
         {
             if (cache.Count >= maxCacheSize)
-                cache.Remove(cache[0]);
+                cache.RemoveAt(0);
             cache[Ip] = infoDTO;
         });
     }
