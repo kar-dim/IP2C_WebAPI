@@ -1,4 +1,4 @@
-﻿using IP2C_WebAPI.DTO;
+using IP2C_WebAPI.DTO;
 using IP2C_WebAPI.Repositories;
 using IP2C_WebAPI.Services.Interfaces;
 using System.Collections.Specialized;
@@ -7,14 +7,14 @@ namespace IP2C_WebAPI.Services.Implementations
 {
     public class CacheService : ICacheService
     {
-        private readonly Ip2cRepository repository;
+        private readonly IServiceScopeFactory scopeFactory;
         private readonly OrderedDictionary cache;
         private readonly object cacheLock;
         private readonly int maxCacheSize;
 
         public CacheService(IConfiguration configuration, IServiceScopeFactory serviceScopeFactory)
         {
-            repository = serviceScopeFactory.CreateScope().ServiceProvider.GetRequiredService<Ip2cRepository>();
+            scopeFactory = serviceScopeFactory;
             cacheLock = new object();
             maxCacheSize = configuration["IpCacheMaxSize"] == null ? 50 : int.Parse(configuration["IpCacheMaxSize"]);
             cache = new OrderedDictionary(maxCacheSize);
@@ -28,11 +28,18 @@ namespace IP2C_WebAPI.Services.Implementations
         }
         private void ExecuteWithCacheLock(Action action) => ExecuteWithCacheLock(() => { action(); return true; });
 
-        public void InitializeCache() => ExecuteWithCacheLock(() =>
+        public void InitializeCache()
         {
-            foreach (var cacheEntry in repository.GetIpsWithCountryAsc(maxCacheSize))
-                cache[cacheEntry.Ip] = new IpInfoDTO(cacheEntry.TwoLetterCode, cacheEntry.ThreeLetterCode, cacheEntry.CountryName);
-        });
+            using var scope = scopeFactory.CreateScope();
+            var repository = scope.ServiceProvider.GetRequiredService<Ip2cRepository>();
+            var entries = repository.GetIpsWithCountryAsc(maxCacheSize).ToList();
+
+            ExecuteWithCacheLock(() =>
+            {
+                foreach (var cacheEntry in entries)
+                    cache[cacheEntry.Ip] = new IpInfoDTO(cacheEntry.TwoLetterCode, cacheEntry.ThreeLetterCode, cacheEntry.CountryName);
+            });
+        }
 
         public IpInfoDTO GetIpInformation(string Ip) => ExecuteWithCacheLock(() => cache[Ip] is IpInfoDTO info ? info : null);
 

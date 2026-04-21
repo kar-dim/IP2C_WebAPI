@@ -1,4 +1,4 @@
-﻿using IP2C_WebAPI.DTO;
+using IP2C_WebAPI.DTO;
 using IP2C_WebAPI.Models;
 using IP2C_WebAPI.Repositories;
 using IP2C_WebAPI.Services.Interfaces;
@@ -7,16 +7,15 @@ namespace IP2C_WebAPI.Services.Implementations;
 
 public class GeoIpRenewalService : IGeoIpRenewalService
 {
-    private readonly Ip2cRepository repository;
-    private readonly IGeoIpService service;
+    private readonly IServiceScopeFactory scopeFactory;
     private readonly ICacheService cache;
     private readonly ILogger<GeoIpRenewalService> logger;
-    
+    private CancellationTokenSource? _cts;
+    private Task? _renewalTask;
+
     public GeoIpRenewalService(IServiceScopeFactory serviceScopeFactory, ICacheService cacheService, ILogger<GeoIpRenewalService> ip2cLogger)
     {
-        var serviceProvider = serviceScopeFactory.CreateScope().ServiceProvider;
-        repository = serviceProvider.GetRequiredService<Ip2cRepository>();
-        service = serviceProvider.GetRequiredService<IGeoIpService>();
+        scopeFactory = serviceScopeFactory;
         logger = ip2cLogger;
         cache = cacheService;
         //populate cache from db
@@ -25,35 +24,70 @@ public class GeoIpRenewalService : IGeoIpRenewalService
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        Task.Run(() => RenewIpsLoop(), CancellationToken.None);
+        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _renewalTask = Task.Run(() => RenewIpsLoop(_cts.Token), _cts.Token);
         return Task.CompletedTask;
     }
 
-    public async Task StopAsync(CancellationToken cancellationToken) => await Task.CompletedTask;
-
-    public void Dispose() => GC.SuppressFinalize(this);
-
-    //main service loop, renews the IPs by using the ip2c service and then sleeps for 1 hour
-    public async Task RenewIpsLoop()
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
-        logger.LogInformation("RenewIpsLoop called");
-        while (true)
-        {
-            await RenewIps();
-            logger.LogInformation("Service will sleep for 1 hour");
-            await Task.Delay(TimeSpan.FromHours(1));
-        }
+        _cts?.Cancel();
+        if (_renewalTask is not null)
+            await Task.WhenAny(_renewalTask, Task.Delay(Timeout.Infinite, cancellationToken));
+        logger.LogInformation("GeoIpRenewalService stopped");
     }
 
-    private async Task RenewIps()
+    public void Dispose()
     {
+        _cts?.Dispose();
+        GC.SuppressFinalize(this);
+    }
+
+    //main service loop, renews the IPs by using the ip2c service and then sleeps for 1 hour
+    public async Task RenewIpsLoop(CancellationToken cancellationToken)
+    {
+        logger.LogInformation("RenewIpsLoop started");
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await RenewIps(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "RenewIps failed, will retry after 1 hour");
+            }
+
+            logger.LogInformation("Service will sleep for 1 hour");
+            try
+            {
+                await Task.Delay(TimeSpan.FromHours(1), cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+        }
+        logger.LogInformation("RenewIpsLoop stopped");
+    }
+
+    private async Task RenewIps(CancellationToken cancellationToken)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var repository = scope.ServiceProvider.GetRequiredService<Ip2cRepository>();
+        var service = scope.ServiceProvider.GetRequiredService<IGeoIpService>();
+
         //get all the countries and their ID codes from our db first
         var countryIdCodes = await repository.GetCountriesAsDictAsync();
         if (countryIdCodes.Count == 0)
             return;
         //get ips by batches (keyset pagination)
-        int lastId = 6; //in our sample db the minimum id = 6
-        while (true)
+        int lastId = 0;
+        while (!cancellationToken.IsCancellationRequested)
         {
             var ipPage = await repository.GetIpAddressesRangeAsync(lastId);
             if (ipPage.Count == 0)
@@ -87,11 +121,10 @@ public class GeoIpRenewalService : IGeoIpRenewalService
                     ipAddress.UpdatedAt = DateTime.Now;
                     repository.UpdateIpAddress(ipAddress);
                 }
-
             }
             //update all batched IPs at once
             await repository.SaveChangesAsync();
-            lastId += 100;
+            lastId = ipPage.Last().Id;
         }
     }
 }

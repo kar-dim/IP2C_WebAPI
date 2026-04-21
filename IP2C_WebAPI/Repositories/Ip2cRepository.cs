@@ -24,13 +24,14 @@ public class Ip2cRepository(Ip2cDbContext dbContext)
 
     public async Task<Dictionary<string, int>> GetCountriesAsDictAsync()
     {
-        var countries = await dbContext.Countries.ToListAsync();
+        var countries = await dbContext.Countries.AsNoTracking().ToListAsync();
         return countries.GroupBy(c => c.ThreeLetterCode).ToDictionary(g => g.Key, g => g.Last().Id);
     }
 
     public async Task<List<IpAddress>> GetIpAddressesRangeAsync(int lastId)
     {
         return await dbContext.Ipaddresses
+            .Include(x => x.Country)
             .OrderBy(x => x.Id)
             .Where(x => x.Id > lastId)
             .Take(100).ToListAsync(); //read 100 per batch
@@ -47,7 +48,7 @@ public class Ip2cRepository(Ip2cDbContext dbContext)
         return await dbContext.Countries
             .Where(country => country.TwoLetterCode == ip2cInfo.TwoLetterCode
                 && country.ThreeLetterCode == ip2cInfo.ThreeLetterCode
-                && country.Name.ToLower() == ip2cInfo.CountryName.ToLower()).FirstOrDefaultAsync();
+                && country.Name == ip2cInfo.CountryName).FirstOrDefaultAsync();
     }
 
     public async Task<List<IpReportDTO>> GetAllIpsAsync()
@@ -80,6 +81,7 @@ public class Ip2cRepository(Ip2cDbContext dbContext)
     public IQueryable<IpCountryRelation> GetIpsWithCountryAsc(int maxSize)
     {
         return dbContext.Ipaddresses
+            .AsNoTracking()
             .Join(dbContext.Countries, ip => ip.CountryId, country => country.Id, (ip, country) => new { ip, country })
             .OrderBy(x => x.ip.UpdatedAt)
             .Take(maxSize)
