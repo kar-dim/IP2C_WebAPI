@@ -10,8 +10,8 @@ public class GeoIpRenewalService : IGeoIpRenewalService
     private readonly IServiceScopeFactory scopeFactory;
     private readonly ICacheService cache;
     private readonly ILogger<GeoIpRenewalService> logger;
-    private CancellationTokenSource? _cts;
-    private Task? _renewalTask;
+    private CancellationTokenSource _cts;
+    private Task _renewalTask;
 
     public GeoIpRenewalService(IServiceScopeFactory serviceScopeFactory, ICacheService cacheService, ILogger<GeoIpRenewalService> ip2cLogger)
     {
