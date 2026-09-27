@@ -1,90 +1,104 @@
-﻿using IP2C_WebAPI.Contexts;
+using IP2C_WebAPI.Contexts;
 using IP2C_WebAPI.DTO;
 using IP2C_WebAPI.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace IP2C_WebAPI.Repositories;
-public class Ip2cRepository(Ip2cDbContext dbContext)
+
+public class Ip2cRepository(Ip2cDbContext dbContext) : IIp2cRepository
 {
-    public async Task SaveChangesAsync()
+    public async Task SaveChangesAsync(CancellationToken cancellationToken = default)
     {
-        await dbContext.SaveChangesAsync();
+        await dbContext.SaveChangesAsync(cancellationToken);
     }
 
-    public async Task AddCountryAsync(Country country)
+    public async Task AddCountryAsync(Country country, CancellationToken cancellationToken = default)
     {
         dbContext.Countries.Add(country);
-        await SaveChangesAsync();
+        await SaveChangesAsync(cancellationToken);
     }
 
     public void UpdateIpAddress(IpAddress address)
     {
-        dbContext.Ipaddresses.Update(address);
+        dbContext.IpAddresses.Update(address);
     }
 
-    public async Task<Dictionary<string, int>> GetCountriesAsDictAsync()
+    public async Task AddIpAddressAsync(IpAddress address, CancellationToken cancellationToken = default)
     {
-        var countries = await dbContext.Countries.AsNoTracking().ToListAsync();
-        return countries.GroupBy(c => c.ThreeLetterCode).ToDictionary(g => g.Key, g => g.Last().Id);
+        dbContext.IpAddresses.Add(address);
+        await SaveChangesAsync(cancellationToken);
     }
 
-    public async Task<List<IpAddress>> GetIpAddressesRangeAsync(int lastId)
+    public async Task<Dictionary<string, int>> GetCountriesAsDictAsync(CancellationToken cancellationToken = default)
     {
-        return await dbContext.Ipaddresses
-            .Include(x => x.Country)
-            .OrderBy(x => x.Id)
-            .Where(x => x.Id > lastId)
-            .Take(100).ToListAsync(); //read 100 per batch
-    }
-
-    public async Task AddIpAddressAsync(IpAddress address)
-    {
-        dbContext.Ipaddresses.Add(address);
-        await SaveChangesAsync();
-    }
-
-    public async Task<Country> GetCountryFromIP2CInfoAsync(IpInfoDTO ip2cInfo)
-    {
-        return await dbContext.Countries
-            .Where(country => country.TwoLetterCode == ip2cInfo.TwoLetterCode
-                && country.ThreeLetterCode == ip2cInfo.ThreeLetterCode
-                && country.Name == ip2cInfo.CountryName).FirstOrDefaultAsync();
-    }
-
-    public async Task<List<IpReportDTO>> GetAllIpsAsync()
-    {
-        return await dbContext.Ipaddresses
-            .Where(ip => ip.Country != null)
-            .GroupBy(ip => ip.Country.Name)
-            .Select(group => new IpReportDTO(group.Key, group.Count(), group.Max(ip => ip.UpdatedAt)))
-            .AsNoTracking().ToListAsync();
-    }
-
-    public async Task<List<IpReportDTO>> GetAllIpsFromCountryCodesAsync(string[] countryCodes)
-    {
-        return await dbContext.Ipaddresses
-           .Where(ip => ip.Country != null && countryCodes.Contains(ip.Country.TwoLetterCode))
-           .GroupBy(ip => ip.Country.Name)
-           .Select(group => new IpReportDTO(group.Key, group.Count(), group.Max(ip => ip.UpdatedAt)))
-           .AsNoTracking().ToListAsync();
-    }
-
-    public async Task<IpCountryRelation> GetIpWithCountryAsync(string Ip)
-    {
-        return await dbContext.Ipaddresses
-            .Join(dbContext.Countries, ipAddr => ipAddr.CountryId, country => country.Id, (ipAddr, country) => new { ipAddr, country })
-            .Where(x => x.ipAddr.Ip == Ip)
-            .Select(x => new IpCountryRelation(x.ipAddr.Ip, x.country.Name, x.country.TwoLetterCode, x.country.ThreeLetterCode))
-            .AsNoTracking().FirstOrDefaultAsync();
-    }
-
-    public IQueryable<IpCountryRelation> GetIpsWithCountryAsc(int maxSize)
-    {
-        return dbContext.Ipaddresses
+        var countries = await dbContext.Countries
             .AsNoTracking()
-            .Join(dbContext.Countries, ip => ip.CountryId, country => country.Id, (ip, country) => new { ip, country })
-            .OrderBy(x => x.ip.UpdatedAt)
+            .Select(c => new { Code = c.ThreeLetterCode.Trim(), c.Id })
+            .ToListAsync(cancellationToken);
+
+        return countries
+            .GroupBy(c => c.Code, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Last().Id, StringComparer.OrdinalIgnoreCase);
+    }
+
+    public async Task<List<IpAddress>> GetIpAddressesRangeAsync(int lastId, int pageSize = 100, CancellationToken cancellationToken = default)
+    {
+        return await dbContext.IpAddresses
+            .Include(x => x.Country)
+            .Where(x => x.Id > lastId)
+            .OrderBy(x => x.Id)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<Country?> GetCountryFromIP2CInfoAsync(IpInfoDTO ip2cInfo, CancellationToken cancellationToken = default)
+    {
+        var twoLetter = ip2cInfo.TwoLetterCode.Trim();
+        var threeLetter = ip2cInfo.ThreeLetterCode.Trim();
+
+        return await dbContext.Countries
+            .FirstOrDefaultAsync(c =>
+                c.TwoLetterCode == twoLetter &&
+                c.ThreeLetterCode == threeLetter,
+                cancellationToken);
+    }
+
+    public async Task<List<IpReportDTO>> GetIpReportAsync(string[]? countryCodes = null, CancellationToken cancellationToken = default)
+    {
+        var query = dbContext.IpAddresses
+            .AsNoTracking()
+            .Where(ip => ip.Country != null);
+
+        if (countryCodes is { Length: > 0 })
+        {
+            query = query.Where(ip => countryCodes.Contains(ip.Country!.TwoLetterCode));
+        }
+
+        return await query
+            .GroupBy(ip => ip.Country!.Name)
+            .Select(group => new IpReportDTO(group.Key, group.Count(), group.Max(ip => ip.UpdatedAt)))
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<IpInfoDTO?> GetIpWithCountryAsync(string ip, CancellationToken cancellationToken = default)
+    {
+        return await dbContext.IpAddresses
+            .AsNoTracking()
+            .Where(x => x.Ip == ip && x.Country != null)
+            .Select(x => new IpInfoDTO(x.Country!.TwoLetterCode, x.Country.ThreeLetterCode, x.Country.Name))
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task<List<(string Ip, IpInfoDTO Info)>> GetLatestIpsWithCountryAsync(int maxSize, CancellationToken cancellationToken = default)
+    {
+        var list = await dbContext.IpAddresses
+            .AsNoTracking()
+            .Where(x => x.Country != null)
+            .OrderByDescending(x => x.UpdatedAt)
             .Take(maxSize)
-            .Select(x => new IpCountryRelation(x.ip.Ip, x.country.Name, x.country.TwoLetterCode, x.country.ThreeLetterCode));
+            .Select(x => new { x.Ip, x.Country!.TwoLetterCode, x.Country.ThreeLetterCode, x.Country.Name })
+            .ToListAsync(cancellationToken);
+
+        return list.Select(x => (x.Ip, new IpInfoDTO(x.TwoLetterCode, x.ThreeLetterCode, x.Name))).ToList();
     }
 }

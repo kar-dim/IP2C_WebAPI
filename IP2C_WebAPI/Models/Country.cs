@@ -1,12 +1,22 @@
-﻿namespace IP2C_WebAPI.Models;
+namespace IP2C_WebAPI.Models;
 
-public class Country(int id, string name, string twolettercode, string threelettercode, DateTime createdAt)
+public class Country
 {
-    public Country() : this(default, default, default, default, default) { }
-    public int Id { get; set; } = id;
-    public string Name { get; set; } = name;
-    public string TwoLetterCode { get; set; } = twolettercode;
-    public string ThreeLetterCode { get; set; } = threelettercode;
-    public DateTime CreatedAt { get; set; } = createdAt;
-    public ICollection<IpAddress> Ipaddresses { get; set; } = [];
+    public Country() { }
+
+    public Country(int id, string name, string twoLetterCode, string threeLetterCode, DateTime createdAt)
+    {
+        Id = id;
+        Name = name;
+        TwoLetterCode = twoLetterCode;
+        ThreeLetterCode = threeLetterCode;
+        CreatedAt = createdAt;
+    }
+
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string TwoLetterCode { get; set; } = string.Empty;
+    public string ThreeLetterCode { get; set; } = string.Empty;
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public ICollection<IpAddress> IpAddresses { get; set; } = [];
 }

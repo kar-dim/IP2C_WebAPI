@@ -1,14 +1,12 @@
-﻿using IP2C_WebAPI.Common;
-using Microsoft.AspNetCore.Mvc;
+using IP2C_WebAPI.Common;
 
 namespace IP2C_WebAPI.Services.Interfaces;
 
-//Interface that defines the business logic of IP2C operations
 public interface IGeoIpService
 {
-    public Task<Ip2cResult> RetrieveIpInfo(string ip);
+    Task<Ip2cResult> RetrieveIpInfoAsync(string ip, CancellationToken cancellationToken = default);
 
-    public Task<IActionResult> GetIpInfo(string Ip);
+    Task<Ip2cResult> GetIpInfoAsync(string ip, CancellationToken cancellationToken = default);
 
-    public Task<IActionResult> GetIpReport(string[] countryCodes);
+    Task<IpReportResult> GetReportAsync(string[]? countryCodes, CancellationToken cancellationToken = default);
 }

@@ -1,104 +1,170 @@
-﻿using IP2C_WebAPI.Common;
+using System.Net;
+using System.Net.Sockets;
+using IP2C_WebAPI.Common;
 using IP2C_WebAPI.DTO;
 using IP2C_WebAPI.Models;
 using IP2C_WebAPI.Repositories;
 using IP2C_WebAPI.Services.Interfaces;
-using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using RestSharp;
-using System.Text.RegularExpressions;
 
 namespace IP2C_WebAPI.Services.Implementations;
 
-
-//Service that implements the business logic of IP2C operations
-public class GeoIpService(ILogger<GeoIpService> logger, ICacheService cacheService, RestClient client, Ip2cRepository repository) : IGeoIpService
+public class GeoIpService(
+    ILogger<GeoIpService> logger,
+    ICacheService cacheService,
+    RestClient client,
+    IIp2cRepository repository) : IGeoIpService
 {
-    private static readonly Regex ipPattern = new Regex(@"^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}$", RegexOptions.Compiled);
-
-    //calls IP2C Rest endpoint and retrieves IP Info
-    public async Task<Ip2cResult> RetrieveIpInfo(string ip)
+    public async Task<Ip2cResult> RetrieveIpInfoAsync(string ip, CancellationToken cancellationToken = default)
     {
-        //GET request to -> https://ip2c.org/{ip}
-        var response = await client.ExecuteAsync(new RestRequest(ip, Method.Get));
-        if (string.IsNullOrWhiteSpace(response?.Content))
+        RestResponse response;
+        try
         {
-            logger.LogError("Ip2c API connection error...");
-            return new Ip2cResult(IP2C_STATUS.CONNECTION_ERROR);
+            var request = new RestRequest(ip, Method.Get);
+            response = await client.ExecuteAsync(request, cancellationToken);
         }
-        //ip2c returns in format "1;CD;COD;COUNTRY" (string, no JSON)
-        var parts = response.Content.Split(';');
-        if (!parts[0].Equals("1") || parts.Length < 4)
+        catch (OperationCanceledException)
         {
-            logger.LogError("Ip2c API IP not found error...");
-            return new Ip2cResult(IP2C_STATUS.API_ERROR);
+            throw;
         }
-        //truncate to 50 characters for db safety
-        return new Ip2cResult(new IpInfoDTO(parts[1], parts[2], parts[3][..Math.Min(parts[3].Length, 50)]), IP2C_STATUS.OK);
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to connect to ip2c.org for IP {Ip}", ip);
+            return Ip2cResult.Failure(Ip2cStatus.ConnectionError, "Unable to establish connection to the external IP2C service.");
+        }
+
+        if (!response.IsSuccessful || string.IsNullOrWhiteSpace(response.Content))
+        {
+            logger.LogWarning("Ip2c API returned HTTP error {StatusCode} for IP {Ip}: {ErrorMessage}",
+                response.StatusCode, ip, response.ErrorMessage);
+
+            if ((int)response.StatusCode >= 500 || response.StatusCode == HttpStatusCode.TooManyRequests)
+            {
+                return Ip2cResult.Failure(Ip2cStatus.UpstreamError, "The upstream IP2C service is currently unavailable or rate-limited.");
+            }
+
+            return Ip2cResult.Failure(Ip2cStatus.ConnectionError, "Unable to retrieve response from the upstream IP2C service.");
+        }
+
+        // ip2c format: "1;TwoLetter;ThreeLetter;CountryName"
+        var trimmed = response.Content.Trim();
+        var parts = trimmed.Split(';');
+        if (parts.Length < 4 || !parts[0].Equals("1", StringComparison.Ordinal))
+        {
+            logger.LogInformation("Ip2c API returned no country match for IP {Ip}: {Content}", ip, trimmed);
+            return Ip2cResult.Failure(Ip2cStatus.NotFound, $"No country information was found for IP address '{ip}'.");
+        }
+
+        var countryName = parts[3].Trim();
+        if (countryName.Length > 50)
+        {
+            countryName = countryName[..50];
+        }
+
+        var info = new IpInfoDTO(parts[1].Trim(), parts[2].Trim(), countryName);
+        return Ip2cResult.Success(info);
     }
 
-    public async Task<IActionResult> GetIpInfo(string Ip)
+    public async Task<Ip2cResult> GetIpInfoAsync(string ip, CancellationToken cancellationToken = default)
     {
-        //basic validation of IP (regex works for ipv4 addresses)
-        if (!ipPattern.IsMatch(Ip))
+        if (string.IsNullOrWhiteSpace(ip) ||
+            !IPAddress.TryParse(ip, out var parsedAddress) ||
+            (parsedAddress.AddressFamily != AddressFamily.InterNetwork && parsedAddress.AddressFamily != AddressFamily.InterNetworkV6))
         {
-            logger.LogError("GetIpInfo: BAD Ip received");
-            return Response.IP2C_BAD_IP;
-        }
-        //first check cache
-        var ipInfo = cacheService.GetIpInformation(Ip);
-        if (ipInfo != null)
-        {
-            logger.LogInformation("GetIpInfo: CACHE HIT for {ip} returned to client", Ip);
-            return Response.Ok(ipInfo); //ipInfo in BODY json
-        }
-        logger.LogInformation("GetIpInfo: CACHE MISS for {ip}, checking in db..", Ip);
-
-        //second try from db
-        IpCountryRelation entry = await repository.GetIpWithCountryAsync(Ip);
-        //if entry is not null -> found in db
-        if (entry != null)
-        {
-            logger.LogInformation("GetIpInfo: Found Ip Info in db, returned to client");
-            ipInfo = new IpInfoDTO(entry.TwoLetterCode, entry.ThreeLetterCode, entry.CountryName);
-            //update cache
-            cacheService.UpdateCacheEntry(Ip, ipInfo);
-            return Response.Ok(ipInfo);
+            logger.LogWarning("GetIpInfoAsync: Invalid IP address: '{Ip}'", ip);
+            return Ip2cResult.Failure(Ip2cStatus.InvalidIp, $"The provided IP address '{ip}' is invalid.");
         }
 
-        //last try from ip2c service
-        logger.LogError("GetIpInfo: Could not find Ip Info in db for IP : {ip}, calling IP2C service...", Ip);
+        var normalizedIp = parsedAddress.ToString();
 
-        var result = await RetrieveIpInfo(Ip);
-        if (!result.IsSuccess)
-            return result.Status == IP2C_STATUS.API_ERROR ? Response.IP_NOT_FOUND : Response.INTERNAL_ERROR;
-
-        //if OK update cache and DB
-        ipInfo = result.IpInfo;
-        cacheService.UpdateCacheEntry(Ip, ipInfo);
-        var countryRecord = await repository.GetCountryFromIP2CInfoAsync(ipInfo);
-        if (countryRecord == null)
+        // 1. Check in-memory cache
+        var cachedInfo = cacheService.Get(normalizedIp);
+        if (cachedInfo != null)
         {
-            countryRecord = new Country(default, ipInfo.CountryName, ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, DateTime.Now);
-            await repository.AddCountryAsync(countryRecord);
+            logger.LogInformation("GetIpInfoAsync: CACHE HIT for {Ip}", normalizedIp);
+            return Ip2cResult.Success(cachedInfo);
         }
-        await repository.AddIpAddressAsync(new IpAddress(default, countryRecord.Id, Ip, DateTime.Now, DateTime.Now, default));
-        logger.LogInformation("GetIpInfo: Found Ip Info from IP2C service, returned to client");
 
-        return Response.Ok(ipInfo);
+        logger.LogInformation("GetIpInfoAsync: CACHE MISS for {Ip}, querying database...", normalizedIp);
+
+        // 2. Check local database
+        var dbInfo = await repository.GetIpWithCountryAsync(normalizedIp, cancellationToken);
+        if (dbInfo != null)
+        {
+            logger.LogInformation("GetIpInfoAsync: Found IP {Ip} in database", normalizedIp);
+            cacheService.Set(normalizedIp, dbInfo);
+            return Ip2cResult.Success(dbInfo);
+        }
+
+        // 3. Fallback to external IP2C service
+        logger.LogInformation("GetIpInfoAsync: IP {Ip} not in database, querying ip2c.org...", normalizedIp);
+        var result = await RetrieveIpInfoAsync(normalizedIp, cancellationToken);
+        if (!result.IsSuccess || result.IpInfo is null)
+        {
+            return result;
+        }
+
+        var ipInfo = result.IpInfo;
+        cacheService.Set(normalizedIp, ipInfo);
+
+        // 4. Save to database with concurrency race condition handling
+        try
+        {
+            var countryRecord = await repository.GetCountryFromIP2CInfoAsync(ipInfo, cancellationToken);
+            if (countryRecord == null)
+            {
+                countryRecord = new Country(0, ipInfo.CountryName, ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, DateTime.UtcNow);
+                await repository.AddCountryAsync(countryRecord, cancellationToken);
+            }
+
+            var ipAddress = new IpAddress(0, countryRecord.Id, normalizedIp, DateTime.UtcNow, DateTime.UtcNow);
+            await repository.AddIpAddressAsync(ipAddress, cancellationToken);
+            logger.LogInformation("GetIpInfoAsync: Successfully saved IP {Ip} to database", normalizedIp);
+        }
+        catch (DbUpdateException ex)
+        {
+            logger.LogWarning(ex, "Concurrency conflict saving IP {Ip} to database; another request inserted it concurrently.", normalizedIp);
+            var existing = await repository.GetIpWithCountryAsync(normalizedIp, cancellationToken);
+            if (existing != null)
+            {
+                return Ip2cResult.Success(existing);
+            }
+        }
+
+        return Ip2cResult.Success(ipInfo);
     }
 
-    public async Task<IActionResult> GetIpReport(string[] countryCodes)
+    public async Task<IpReportResult> GetReportAsync(string[]? countryCodes, CancellationToken cancellationToken = default)
     {
-        if (countryCodes?.Any(code => string.IsNullOrWhiteSpace(code) || code.Trim().Length != 2) == true)
+        string[] normalizedCodes = [];
+
+        if (countryCodes is { Length: > 0 })
         {
-            logger.LogError("GetIpReport: At least one invalid country code received");
-            return Response.IP2C_BAD_COUNTRY_CODE;
+            var list = new List<string>();
+            foreach (var raw in countryCodes)
+            {
+                if (string.IsNullOrWhiteSpace(raw))
+                    continue;
+
+                var segments = raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                foreach (var code in segments)
+                {
+                    if (code.Length != 2)
+                    {
+                        logger.LogWarning("GetReportAsync: Invalid country code received: '{Code}'", code);
+                        return IpReportResult.Failure(Ip2cStatus.InvalidCountryCode, $"Country code '{code}' is invalid. ISO-2 country codes must be exactly 2 letters (e.g. 'US', 'GR').");
+                    }
+
+                    list.Add(code.ToUpperInvariant());
+                }
+            }
+
+            normalizedCodes = list.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         }
 
-        bool showAllIps = countryCodes == null || countryCodes.Length == 0;
-        var results = showAllIps ? await repository.GetAllIpsAsync() : await repository.GetAllIpsFromCountryCodesAsync(countryCodes);
-
-        logger.LogInformation("GetIpReport: Report generated successfully. IPs count: {Count}", results.Count);
-        return Response.Ok(results);
+        var results = await repository.GetIpReportAsync(normalizedCodes, cancellationToken);
+        logger.LogInformation("GetReportAsync: Generated report successfully with {Count} country groups", results.Count);
+        return IpReportResult.Success(results);
     }
 }

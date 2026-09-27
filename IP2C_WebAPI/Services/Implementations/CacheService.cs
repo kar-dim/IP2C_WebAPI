@@ -1,53 +1,75 @@
 using IP2C_WebAPI.DTO;
 using IP2C_WebAPI.Repositories;
 using IP2C_WebAPI.Services.Interfaces;
-using System.Collections.Specialized;
 
-namespace IP2C_WebAPI.Services.Implementations
+namespace IP2C_WebAPI.Services.Implementations;
+
+public class CacheService : ICacheService
 {
-    public class CacheService : ICacheService
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly System.Collections.Generic.OrderedDictionary<string, IpInfoDTO> _cache;
+    private readonly object _cacheLock = new();
+    private readonly int _maxCacheSize;
+
+    public CacheService(IConfiguration configuration, IServiceScopeFactory serviceScopeFactory)
     {
-        private readonly IServiceScopeFactory scopeFactory;
-        private readonly OrderedDictionary cache;
-        private readonly object cacheLock;
-        private readonly int maxCacheSize;
+        _scopeFactory = serviceScopeFactory;
+        _maxCacheSize = configuration.GetValue("IpCacheMaxSize", 50);
+        _cache = new System.Collections.Generic.OrderedDictionary<string, IpInfoDTO>(_maxCacheSize > 0 ? _maxCacheSize : 50);
+    }
 
-        public CacheService(IConfiguration configuration, IServiceScopeFactory serviceScopeFactory)
+    public async Task InitializeCacheAsync(CancellationToken cancellationToken = default)
+    {
+        if (_maxCacheSize <= 0)
+            return;
+
+        using var scope = _scopeFactory.CreateScope();
+        var repository = scope.ServiceProvider.GetRequiredService<IIp2cRepository>();
+        var entries = await repository.GetLatestIpsWithCountryAsync(_maxCacheSize, cancellationToken);
+
+        lock (_cacheLock)
         {
-            scopeFactory = serviceScopeFactory;
-            cacheLock = new object();
-            maxCacheSize = configuration["IpCacheMaxSize"] == null ? 50 : int.Parse(configuration["IpCacheMaxSize"]);
-            cache = new OrderedDictionary(maxCacheSize);
-        }
-
-        //All cache operations must execute under this method, in order to lock the cache, execute, and then release the lock
-        private T ExecuteWithCacheLock<T>(Func<T> action)
-        {
-            lock (cacheLock)
-                return action();
-        }
-        private void ExecuteWithCacheLock(Action action) => ExecuteWithCacheLock(() => { action(); return true; });
-
-        public void InitializeCache()
-        {
-            using var scope = scopeFactory.CreateScope();
-            var repository = scope.ServiceProvider.GetRequiredService<Ip2cRepository>();
-            var entries = repository.GetIpsWithCountryAsc(maxCacheSize).ToList();
-
-            ExecuteWithCacheLock(() =>
+            _cache.Clear();
+            foreach (var (ip, info) in entries)
             {
-                foreach (var cacheEntry in entries)
-                    cache[cacheEntry.Ip] = new IpInfoDTO(cacheEntry.TwoLetterCode, cacheEntry.ThreeLetterCode, cacheEntry.CountryName);
-            });
+                _cache[ip] = info;
+            }
         }
+    }
 
-        public IpInfoDTO GetIpInformation(string Ip) => ExecuteWithCacheLock(() => cache[Ip] is IpInfoDTO info ? info : null);
-
-        public void UpdateCacheEntry(string Ip, IpInfoDTO infoDTO) => ExecuteWithCacheLock(() =>
+    public IpInfoDTO? Get(string ip)
+    {
+        lock (_cacheLock)
         {
-            if (cache.Count >= maxCacheSize)
-                cache.RemoveAt(0);
-            cache[Ip] = infoDTO;
-        });
+            if (_cache.TryGetValue(ip, out var info))
+            {
+                // Refresh LRU position by moving to the end
+                _cache.Remove(ip);
+                _cache[ip] = info;
+                return info;
+            }
+
+            return null;
+        }
+    }
+
+    public void Set(string ip, IpInfoDTO infoDTO)
+    {
+        if (_maxCacheSize <= 0)
+            return;
+
+        lock (_cacheLock)
+        {
+            if (_cache.ContainsKey(ip))
+            {
+                _cache.Remove(ip);
+            }
+            else if (_cache.Count >= _maxCacheSize)
+            {
+                _cache.RemoveAt(0);
+            }
+
+            _cache[ip] = infoDTO;
+        }
     }
 }

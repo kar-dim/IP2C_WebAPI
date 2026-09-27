@@ -1,14 +1,12 @@
-﻿using IP2C_WebAPI.DTO;
+using IP2C_WebAPI.DTO;
 
-//Interface that defines the business logic of Cache operations
-namespace IP2C_WebAPI.Services.Interfaces
+namespace IP2C_WebAPI.Services.Interfaces;
+
+public interface ICacheService
 {
-    public interface ICacheService
-    {
-        public void InitializeCache();
+    Task InitializeCacheAsync(CancellationToken cancellationToken = default);
 
-        public IpInfoDTO GetIpInformation(string Ip);
+    IpInfoDTO? Get(string ip);
 
-        public void UpdateCacheEntry(string Ip, IpInfoDTO infoDTO);
-    }
+    void Set(string ip, IpInfoDTO infoDTO);
 }

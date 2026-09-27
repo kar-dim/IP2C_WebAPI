@@ -5,41 +5,39 @@ using IP2C_WebAPI.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using RestSharp;
 
-namespace IP2C_WebAPI;
+var builder = WebApplication.CreateBuilder(args);
 
-public class Program
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+builder.Services.AddProblemDetails();
+
+// Database context
+builder.Services.AddDbContext<Ip2cDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DbConnectionString")));
+
+// Repositories & Services
+builder.Services.AddScoped<IIp2cRepository, Ip2cRepository>();
+builder.Services.AddScoped<IGeoIpService, GeoIpService>();
+builder.Services.AddSingleton<ICacheService, CacheService>();
+
+// Hosted background worker
+builder.Services.AddHostedService<GeoIpRenewalService>();
+
+// Configured RestClient with timeout options
+builder.Services.AddSingleton(new RestClient(new RestClientOptions("https://ip2c.org")
 {
-    public static void Main(string[] args)
-    {
-        var builder = WebApplication.CreateBuilder(args);
+    Timeout = TimeSpan.FromSeconds(10)
+}));
 
-        builder.Services.AddControllers();
-        builder.Services.AddEndpointsApiExplorer();
-        builder.Services.AddSwaggerGen();
-        //add db context
-        builder.Services.AddDbContext<Ip2cDbContext>(options =>
-            options.UseSqlServer(builder.Configuration.GetConnectionString("DbConnectionString")));
+var app = builder.Build();
 
-        //our custom services
-        //ip2c service and repository
-        builder.Services.AddScoped<IGeoIpService, GeoIpService>();
-        builder.Services.AddScoped<Ip2cRepository>();
-        //ip renewal service -> renews the IPs (local db and cache) by calling the IP2C API every 1 hour, also initializes the cache (from db) on startup
-        builder.Services.AddSingleton<ICacheService, CacheService>();
-        builder.Services.AddSingleton<IGeoIpRenewalService, GeoIpRenewalService>();
-        builder.Services.AddHostedService(provider => provider.GetService<IGeoIpRenewalService>());
-        //Singleton RestClient for IP2C service rest calls
-        builder.Services.AddSingleton(provider => new RestClient("https://ip2c.org"));
-
-        var app = builder.Build();
-        if (app.Environment.IsDevelopment())
-        {
-            app.UseSwagger();
-            app.UseSwaggerUI();
-        }
-
-        app.UseAuthorization();
-        app.MapControllers();
-        app.Run();
-    }
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
 }
+
+app.UseExceptionHandler();
+app.MapControllers();
+app.Run();

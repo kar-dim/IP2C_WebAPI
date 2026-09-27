@@ -1,130 +1,159 @@
-using IP2C_WebAPI.DTO;
 using IP2C_WebAPI.Models;
 using IP2C_WebAPI.Repositories;
 using IP2C_WebAPI.Services.Interfaces;
 
 namespace IP2C_WebAPI.Services.Implementations;
 
-public class GeoIpRenewalService : IGeoIpRenewalService
+public class GeoIpRenewalService(
+    IServiceScopeFactory serviceScopeFactory,
+    ICacheService cacheService,
+    ILogger<GeoIpRenewalService> logger) : BackgroundService
 {
-    private readonly IServiceScopeFactory scopeFactory;
-    private readonly ICacheService cache;
-    private readonly ILogger<GeoIpRenewalService> logger;
-    private CancellationTokenSource _cts;
-    private Task _renewalTask;
-
-    public GeoIpRenewalService(IServiceScopeFactory serviceScopeFactory, ICacheService cacheService, ILogger<GeoIpRenewalService> ip2cLogger)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        scopeFactory = serviceScopeFactory;
-        logger = ip2cLogger;
-        cache = cacheService;
-        //populate cache from db
-        cache.InitializeCache();
-    }
+        logger.LogInformation("GeoIpRenewalService background worker started");
 
-    public Task StartAsync(CancellationToken cancellationToken)
-    {
-        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _renewalTask = Task.Run(() => RenewIpsLoop(_cts.Token), _cts.Token);
-        return Task.CompletedTask;
-    }
+        // Asynchronously warm the cache on startup without blocking DI resolution
+        try
+        {
+            await cacheService.InitializeCacheAsync(stoppingToken);
+            logger.LogInformation("GeoIpRenewalService: Cache warm-up completed successfully");
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "GeoIpRenewalService: Failed to initialize IP cache on startup");
+        }
 
-    public async Task StopAsync(CancellationToken cancellationToken)
-    {
-        _cts?.Cancel();
-        if (_renewalTask is not null)
-            await Task.WhenAny(_renewalTask, Task.Delay(Timeout.Infinite, cancellationToken));
-        logger.LogInformation("GeoIpRenewalService stopped");
-    }
-
-    public void Dispose()
-    {
-        _cts?.Dispose();
-        GC.SuppressFinalize(this);
-    }
-
-    //main service loop, renews the IPs by using the ip2c service and then sleeps for 1 hour
-    public async Task RenewIpsLoop(CancellationToken cancellationToken)
-    {
-        logger.LogInformation("RenewIpsLoop started");
-        while (!cancellationToken.IsCancellationRequested)
+        while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await RenewIps(cancellationToken);
+                await RenewIpsAsync(stoppingToken);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
                 break;
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "RenewIps failed, will retry after 1 hour");
+                logger.LogError(ex, "GeoIpRenewalService: Renewal cycle encountered an error; will retry in 1 hour");
             }
 
-            logger.LogInformation("Service will sleep for 1 hour");
+            logger.LogInformation("GeoIpRenewalService: Sleeping for 1 hour until next renewal cycle");
             try
             {
-                await Task.Delay(TimeSpan.FromHours(1), cancellationToken);
+                await Task.Delay(TimeSpan.FromHours(1), stoppingToken);
             }
             catch (OperationCanceledException)
             {
                 break;
             }
         }
-        logger.LogInformation("RenewIpsLoop stopped");
+
+        logger.LogInformation("GeoIpRenewalService background worker stopped");
     }
 
-    private async Task RenewIps(CancellationToken cancellationToken)
+    public async Task RenewIpsAsync(CancellationToken cancellationToken)
     {
-        using var scope = scopeFactory.CreateScope();
-        var repository = scope.ServiceProvider.GetRequiredService<Ip2cRepository>();
-        var service = scope.ServiceProvider.GetRequiredService<IGeoIpService>();
+        logger.LogInformation("GeoIpRenewalService: Starting IP renewal cycle");
 
-        //get all the countries and their ID codes from our db first
-        var countryIdCodes = await repository.GetCountriesAsDictAsync();
+        // Load country cache once at the start of renewal
+        Dictionary<string, int> countryIdCodes;
+        using (var initialScope = serviceScopeFactory.CreateScope())
+        {
+            var initialRepo = initialScope.ServiceProvider.GetRequiredService<IIp2cRepository>();
+            countryIdCodes = await initialRepo.GetCountriesAsDictAsync(cancellationToken);
+        }
+
         if (countryIdCodes.Count == 0)
+        {
+            logger.LogWarning("GeoIpRenewalService: No countries found in database. Skipping renewal.");
             return;
-        //get ips by batches (keyset pagination)
+        }
+
+        var countryLock = new object();
         int lastId = 0;
+
         while (!cancellationToken.IsCancellationRequested)
         {
-            var ipPage = await repository.GetIpAddressesRangeAsync(lastId);
+            // Fresh scope per batch prevents DbContext memory bloat
+            using var batchScope = serviceScopeFactory.CreateScope();
+            var repository = batchScope.ServiceProvider.GetRequiredService<IIp2cRepository>();
+            var service = batchScope.ServiceProvider.GetRequiredService<IGeoIpService>();
+
+            var ipPage = await repository.GetIpAddressesRangeAsync(lastId, 100, cancellationToken);
             if (ipPage.Count == 0)
                 break;
-            //update information for these 100 Ip addresses
-            foreach (var ipAddress in ipPage)
+
+            // Controlled parallel HTTP calls (5 concurrent) to avoid overloading ip2c.org
+            await Parallel.ForEachAsync(ipPage, new ParallelOptions
             {
-                var result = await service.RetrieveIpInfo(ipAddress.Ip);
-                if (!result.IsSuccess)
-                    continue;
+                MaxDegreeOfParallelism = 5,
+                CancellationToken = cancellationToken
+            }, async (ipAddress, ct) =>
+            {
+                var result = await service.RetrieveIpInfoAsync(ipAddress.Ip, ct);
+                if (!result.IsSuccess || result.IpInfo is null)
+                    return;
 
                 var ipInfo = result.IpInfo;
-                //we have to check if the country for this IP changed
-                if (!countryIdCodes.TryGetValue(ipInfo.ThreeLetterCode, out int countryId))
+                var threeLetter = ipInfo.ThreeLetterCode.Trim();
+
+                int countryId;
+                lock (countryLock)
                 {
-                    var countryToAdd = new Country(default, ipInfo.CountryName, ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, DateTime.Now);
-                    await repository.AddCountryAsync(countryToAdd);
-                    countryId = countryToAdd.Id;
-                    countryIdCodes[ipInfo.ThreeLetterCode] = countryId;
+                    if (!countryIdCodes.TryGetValue(threeLetter, out countryId))
+                    {
+                        using var countryScope = serviceScopeFactory.CreateScope();
+                        var countryRepo = countryScope.ServiceProvider.GetRequiredService<IIp2cRepository>();
+
+                        var existingCountry = countryRepo.GetCountryFromIP2CInfoAsync(ipInfo, ct).GetAwaiter().GetResult();
+                        if (existingCountry is null)
+                        {
+                            var newCountry = new Country(0, ipInfo.CountryName, ipInfo.TwoLetterCode.Trim(), threeLetter, DateTime.UtcNow);
+                            countryRepo.AddCountryAsync(newCountry, ct).GetAwaiter().GetResult();
+                            countryId = newCountry.Id;
+                        }
+                        else
+                        {
+                            countryId = existingCountry.Id;
+                        }
+
+                        countryIdCodes[threeLetter] = countryId;
+                    }
                 }
 
-                //update cache (only if changed)
-                if (cache.GetIpInformation(ipAddress.Ip) != null && ipAddress.Country != null && !ipAddress.Country.ThreeLetterCode.Equals(ipInfo.ThreeLetterCode))
-                    cache.UpdateCacheEntry(ipAddress.Ip, new IpInfoDTO(ipInfo.TwoLetterCode, ipInfo.ThreeLetterCode, ipInfo.CountryName));
+                bool countryChanged = ipAddress.Country is null ||
+                    !string.Equals(ipAddress.Country.ThreeLetterCode.Trim(), threeLetter, StringComparison.OrdinalIgnoreCase);
 
-                //update db, replace old values with new values ONLY if changes occured
-                if (ipAddress.Country != null && !ipAddress.Country.ThreeLetterCode.Equals(ipInfo.ThreeLetterCode))
+                if (countryChanged)
                 {
-                    ipAddress.Country = default;
+                    ipAddress.Country = null;
                     ipAddress.CountryId = countryId;
-                    ipAddress.UpdatedAt = DateTime.Now;
+                    ipAddress.UpdatedAt = DateTime.UtcNow;
+                    repository.UpdateIpAddress(ipAddress);
+
+                    if (cacheService.Get(ipAddress.Ip) is not null)
+                    {
+                        cacheService.Set(ipAddress.Ip, ipInfo);
+                    }
+                }
+                else
+                {
+                    // Update verification timestamp even when country remained identical
+                    ipAddress.UpdatedAt = DateTime.UtcNow;
                     repository.UpdateIpAddress(ipAddress);
                 }
-            }
-            //update all batched IPs at once
-            await repository.SaveChangesAsync();
+            });
+
+            await repository.SaveChangesAsync(cancellationToken);
             lastId = ipPage.Last().Id;
         }
+
+        logger.LogInformation("GeoIpRenewalService: IP renewal cycle finished successfully");
     }
 }

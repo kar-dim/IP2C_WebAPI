@@ -1,4 +1,3 @@
-﻿using IP2C_WebAPI.DTO;
 using IP2C_WebAPI.Models;
 using Microsoft.EntityFrameworkCore;
 
@@ -15,11 +14,9 @@ public partial class Ip2cDbContext : DbContext
     {
     }
 
-    public virtual DbSet<Country> Countries { get; set; }
+    public virtual DbSet<Country> Countries { get; set; } = null!;
 
-    public virtual DbSet<IpAddress> Ipaddresses { get; set; }
-
-    public virtual DbSet<IpReportDTO> IpReportDTOs { get; set; }
+    public virtual DbSet<IpAddress> IpAddresses { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -37,6 +34,9 @@ public partial class Ip2cDbContext : DbContext
                 .HasMaxLength(2)
                 .IsUnicode(false)
                 .IsFixedLength();
+
+            entity.HasIndex(e => e.TwoLetterCode).IsUnique();
+            entity.HasIndex(e => e.ThreeLetterCode).IsUnique();
         });
 
         modelBuilder.Entity<IpAddress>(entity =>
@@ -44,23 +44,20 @@ public partial class Ip2cDbContext : DbContext
             entity.ToTable("IPAddresses");
 
             entity.HasIndex(e => e.Ip, "IX_IPAddresses").IsUnique();
+            entity.HasIndex(e => e.CountryId, "IX_IPAddresses_CountryId");
 
             entity.Property(e => e.CreatedAt).HasDefaultValueSql("(getutcdate())");
             entity.Property(e => e.Ip)
-                .HasMaxLength(15)
+                .HasMaxLength(45)
                 .IsUnicode(false)
                 .HasColumnName("IP");
             entity.Property(e => e.UpdatedAt).HasDefaultValueSql("(getutcdate())");
 
-            entity.HasOne(d => d.Country).WithMany(p => p.Ipaddresses)
+            entity.HasOne(d => d.Country)
+                .WithMany(p => p.IpAddresses)
                 .HasForeignKey(d => d.CountryId)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_IPAddresses_Countries");
-        });
-
-        modelBuilder.Entity<IpReportDTO>(entity =>
-        {
-            entity.HasNoKey();
         });
 
         OnModelCreatingPartial(modelBuilder);
